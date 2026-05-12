@@ -75,13 +75,13 @@ function withTempDir(fn) {
   }
 }
 
-function createSpawnRecorder({ failCommands = [] } = {}) {
+function createSpawnRecorder({ failCommands = [], recordOptions = false } = {}) {
   const calls = [];
   const failures = new Set(failCommands);
   return {
     calls,
-    spawn(command, args) {
-      calls.push({ command, args });
+    spawn(command, args, options) {
+      calls.push(recordOptions ? { command, args, options } : { command, args });
       const child = new EventEmitter();
       child.unref = () => {};
       process.nextTick(() => child.emit("close", failures.has(command) ? 1 : 0));
@@ -367,6 +367,57 @@ test("open-target discovery falls back to the Exec command", async () => {
     assert.deepEqual(spawnRecorder.calls, [
       { command: editorCommand, args: ["--goto", projectDir] },
     ]);
+  });
+});
+
+test("open-target discovery sanitizes desktop launch environment", async () => {
+  await withTempDir(async (tmp) => {
+    const dataHome = path.join(tmp, "share");
+    const appsDir = path.join(dataHome, "applications");
+    const binDir = path.join(tmp, "bin");
+    const gio = makeExecutable(binDir, "gio");
+    const editorCommand = makeExecutable(path.join(tmp, "toolbox", "bin"), "workspace-agent");
+    const desktopFile = path.join(appsDir, "workspace-agent.desktop");
+    const projectDir = path.join(tmp, "project");
+    const spawnRecorder = createSpawnRecorder({ recordOptions: true });
+    fs.mkdirSync(appsDir, { recursive: true });
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(
+      desktopFile,
+      [
+        "[Desktop Entry]",
+        "Type=Application",
+        "Name=Workspace Agent",
+        `Exec=${editorCommand} %U`,
+        "Categories=Development;",
+        "Comment=Coordinate coding agents across workspaces",
+      ].join("\n"),
+    );
+
+    const platform = evaluatePatched(
+      openTargetsBundle,
+      {
+        HOME: tmp,
+        PATH: `${binDir}:${path.dirname(editorCommand)}`,
+        XDG_DATA_HOME: dataHome,
+        XDG_DATA_DIRS: path.join(tmp, "empty"),
+        CHROME_DESKTOP: "codex-open-target-launchers.desktop",
+        ELECTRON_RENDERER_URL: "http://127.0.0.1:5203/",
+        CODEX_ELECTRON_USER_DATA_DIR: path.join(tmp, "codex-user-data"),
+        CODEX_LINUX_APP_ID: "codex-open-target-launchers",
+      },
+      "Xg.find((target)=>target.platforms.linux?.label===`Workspace Agent`).platforms.linux",
+      spawnRecorder,
+    );
+
+    await platform.open({ command: editorCommand, path: projectDir });
+
+    assert.equal(spawnRecorder.calls[0].command, gio);
+    assert.equal(spawnRecorder.calls[0].options.cwd, tmp);
+    assert.equal(spawnRecorder.calls[0].options.env.CHROME_DESKTOP, undefined);
+    assert.equal(spawnRecorder.calls[0].options.env.ELECTRON_RENDERER_URL, undefined);
+    assert.equal(spawnRecorder.calls[0].options.env.CODEX_ELECTRON_USER_DATA_DIR, undefined);
+    assert.equal(spawnRecorder.calls[0].options.env.CODEX_LINUX_APP_ID, undefined);
   });
 });
 
