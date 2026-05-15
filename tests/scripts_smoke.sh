@@ -688,6 +688,109 @@ CPP
     assert_contains "$output_log" "already applied"
 }
 
+test_native_module_rebuild_uses_local_electron_rebuild_toolchain() {
+    info "Checking native module rebuild uses local Electron rebuild toolchain"
+    local workspace="$TMP_DIR/native-module-rebuild-toolchain"
+    local app_dir="$workspace/app-extracted"
+    local fake_bin="$workspace/bin"
+    local toolchain_log="$workspace/toolchain.log"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$app_dir/node_modules/better-sqlite3" "$app_dir/node_modules/node-pty" "$fake_bin"
+    printf '%s\n' '{"version":"12.9.0"}' > "$app_dir/node_modules/better-sqlite3/package.json"
+    printf '%s\n' '{"version":"1.1.0"}' > "$app_dir/node_modules/node-pty/package.json"
+
+    cat > "$fake_bin/npm" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf 'npm %s\n' "$*" >> "$NATIVE_TOOLCHAIN_LOG"
+args=" $* "
+
+case "$args" in
+    *" @electron/rebuild@4.0.4 "*)
+        mkdir -p node_modules/.bin
+        cat > node_modules/.bin/electron-rebuild <<'REBUILD'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'electron-rebuild %s\n' "$*" >> "$NATIVE_TOOLCHAIN_LOG"
+mkdir -p node_modules/better-sqlite3/build/Release node_modules/node-pty/build/Release
+: > node_modules/better-sqlite3/build/Release/better_sqlite3.node
+: > node_modules/node-pty/build/Release/pty.node
+REBUILD
+        chmod +x node_modules/.bin/electron-rebuild
+        ;;
+esac
+
+case "$args" in
+    *" better-sqlite3@12.9.0 "*)
+        mkdir -p node_modules/better-sqlite3/src/util
+        printf '%s\n' '{"version":"12.9.0"}' > node_modules/better-sqlite3/package.json
+        cat > node_modules/better-sqlite3/src/better_sqlite3.cpp <<'CPP'
+void init(v8::Isolate* isolate, Addon* addon) {
+	v8::Local<v8::External> data = v8::External::New(isolate, addon);
+}
+CPP
+        cat > node_modules/better-sqlite3/src/util/macros.cpp <<'CPP'
+#define EasyIsolate v8::Isolate* isolate = v8::Isolate::GetCurrent()
+#define OnlyIsolate info.GetIsolate()
+#define OnlyContext isolate->GetCurrentContext()
+#define OnlyAddon static_cast<Addon*>(info.Data().As<v8::External>()->Value())
+CPP
+        cat > node_modules/better-sqlite3/src/util/helpers.cpp <<'CPP'
+void SetPrototypeGetter() {
+	recv->InstanceTemplate()->SetNativeDataProperty(
+		InternalizedFromLatin1(isolate, name),
+		func,
+		0,
+		data
+	);
+}
+CPP
+        ;;
+esac
+
+case "$args" in
+    *" node-pty@1.1.0 "*)
+        mkdir -p node_modules/node-pty
+        printf '%s\n' '{"version":"1.1.0"}' > node_modules/node-pty/package.json
+        ;;
+esac
+SCRIPT
+    chmod +x "$fake_bin/npm"
+
+    cat > "$fake_bin/npx" <<'SCRIPT'
+#!/usr/bin/env bash
+echo "npx should not be used for electron-rebuild" >&2
+exit 99
+SCRIPT
+    chmod +x "$fake_bin/npx"
+
+    (
+        PATH="$fake_bin:$PATH"
+        export PATH
+        NATIVE_TOOLCHAIN_LOG="$toolchain_log"
+        export NATIVE_TOOLCHAIN_LOG
+        WORK_DIR="$workspace/work"
+        ELECTRON_VERSION="42.0.1"
+        ELECTRON_HEADERS_URL="https://example.invalid/electron"
+        mkdir -p "$WORK_DIR"
+        info() { echo "[INFO] $*" >&2; }
+        warn() { echo "[WARN] $*" >&2; }
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/native-modules.sh"
+        build_native_modules "$app_dir"
+    ) > "$output_log" 2>&1
+
+    assert_contains "$toolchain_log" "@electron/rebuild@4.0.4"
+    assert_contains "$toolchain_log" "node-abi@^4.31.0"
+    assert_contains "$toolchain_log" "electron-rebuild -v 42.0.1 --force --dist-url https://example.invalid/electron"
+    assert_contains "$output_log" "Native modules built successfully"
+    assert_file_exists "$app_dir/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+    assert_file_exists "$app_dir/node_modules/node-pty/build/Release/pty.node"
+}
+
 test_launcher_template_sanity() {
     info "Checking launcher template markers"
     assert_contains "$REPO_DIR/install.sh" 'DEFAULT_CODEX_WEBVIEW_PORT=5175'
@@ -699,6 +802,10 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/install.sh" "MIN_BETTER_SQLITE3_VERSION_FOR_ELECTRON_41=\"12.9.0\""
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "better_sqlite3_build_version"
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "patch_better_sqlite3_for_v8_external_pointer_api"
+    assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "@electron/rebuild@4.0.4"
+    assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "node-abi@^4.31.0"
+    assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" 'node_modules/.bin/electron-rebuild'
+    assert_not_contains "$REPO_DIR/scripts/lib/native-modules.sh" "npx --yes @electron/rebuild"
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "prune_native_module_build_artifacts"
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" 'find "$build_dir" -type f ! -name'
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" 'find "$module_dir" -type f -name'
@@ -2510,6 +2617,7 @@ main() {
     test_installer_keeps_electron_fallback_for_bad_metadata
     test_managed_node_runtime_source_install
     test_better_sqlite3_electron_42_source_patch
+    test_native_module_rebuild_uses_local_electron_rebuild_toolchain
     test_browser_use_node_repl_fallback_runtime
     test_browser_use_node_repl_glibc_pidfd_patch_static
     test_browser_use_node_repl_ldd_output_compatibility

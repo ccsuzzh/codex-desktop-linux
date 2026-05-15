@@ -5,6 +5,9 @@
 # shellcheck shell=bash
 
 # ---- Build native modules in a clean directory ----
+ELECTRON_REBUILD_PACKAGE="@electron/rebuild@4.0.4"
+ELECTRON_REBUILD_NODE_ABI_PACKAGE="node-abi@^4.31.0"
+
 version_lt() {
     [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" = "$1" ]
 }
@@ -148,15 +151,21 @@ build_native_modules() {
     echo '{"private":true}' > package.json
 
     info "Installing fresh sources from npm..."
-    npm install "electron@$ELECTRON_VERSION" --save-dev --ignore-scripts 2>&1 >&2
+    npm install \
+        "electron@$ELECTRON_VERSION" \
+        "$ELECTRON_REBUILD_PACKAGE" \
+        "$ELECTRON_REBUILD_NODE_ABI_PACKAGE" \
+        --save-dev \
+        --ignore-scripts 2>&1 >&2
     npm install "better-sqlite3@$bs3_build_ver" "node-pty@$npty_ver" --ignore-scripts 2>&1 >&2
     patch_better_sqlite3_for_v8_external_pointer_api "$build_dir/node_modules/better-sqlite3"
 
     info "Compiling for Electron v$ELECTRON_VERSION (this takes ~1 min)..."
     info "Using Electron headers: $ELECTRON_HEADERS_URL"
+    [ -x "$build_dir/node_modules/.bin/electron-rebuild" ] || error "electron-rebuild binary not found in native build toolchain"
     npm_config_disturl="$ELECTRON_HEADERS_URL" \
     NPM_CONFIG_DISTURL="$ELECTRON_HEADERS_URL" \
-    npx --yes @electron/rebuild -v "$ELECTRON_VERSION" --force --dist-url "$ELECTRON_HEADERS_URL" 2>&1 >&2
+    "$build_dir/node_modules/.bin/electron-rebuild" -v "$ELECTRON_VERSION" --force --dist-url "$ELECTRON_HEADERS_URL" 2>&1 >&2
 
     info "Native modules built successfully"
 
