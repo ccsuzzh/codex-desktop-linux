@@ -362,3 +362,25 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Remove older automatic releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_TAG: ${{ steps.release-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$CURRENT_TAG" != auto-* ]]; then
+            echo "Tag '$CURRENT_TAG' is not an automatic release tag; skipping cleanup."
+            exit 0
+          fi
+
+          gh release list --limit 100 --json tagName --jq '.[].tagName' |
+            while IFS= read -r tag; do
+              [ -n "$tag" ] || continue
+              [[ "$tag" == auto-* ]] || continue
+              [ "$tag" != "$CURRENT_TAG" ] || continue
+
+              echo "Deleting older automatic release: $tag"
+              gh release delete "$tag" --yes --cleanup-tag
+            done
