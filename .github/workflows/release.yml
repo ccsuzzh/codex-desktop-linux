@@ -1,0 +1,293 @@
+name: Release
+
+on:
+  schedule:
+    - cron: '30 7 * * *'
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  UPSTREAM_DMG_URL: https://persistent.oaistatic.com/codex-app-prod/Codex.dmg
+  UPSTREAM_DMG_PATH: /tmp/codex-upstream-ci/Codex.dmg
+  DMG_CACHE_SCHEMA_VERSION: v1
+
+jobs:
+  detect-upstream:
+    name: Detect Upstream Changes
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      dmg_cache_key: ${{ steps.metadata.outputs.cache_segment }}
+      last_modified: ${{ steps.metadata.outputs.last_modified }}
+      etag: ${{ steps.metadata.outputs.etag }}
+      content_length: ${{ steps.metadata.outputs.content_length }}
+      package_version: ${{ steps.version.outputs.package_version }}
+
+    steps:
+      - name: Determine package version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+          else
+            version="$(date -u +%Y.%m.%d.%H%M%S)"
+          fi
+          echo "package_version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Capture upstream DMG metadata
+        id: metadata
+        run: |
+          set -euo pipefail
+
+          headers_file="$(mktemp)"
+          trap 'rm -f "$headers_file"' EXIT
+
+          curl -fsSLI "$UPSTREAM_DMG_URL" > "$headers_file"
+
+          last_modified="$(awk 'BEGIN{IGNORECASE=1} /^last-modified:/ {sub(/\r$/,""); sub(/^[^:]+: /,""); print; exit}' "$headers_file")"
+          etag="$(awk 'BEGIN{IGNORECASE=1} /^etag:/ {sub(/\r$/,""); sub(/^[^:]+: /,""); gsub(/"/,""); print; exit}' "$headers_file")"
+          content_length="$(awk 'BEGIN{IGNORECASE=1} /^content-length:/ {sub(/\r$/,""); sub(/^[^:]+: /,""); print; exit}' "$headers_file")"
+
+          [ -n "$last_modified" ] || last_modified="unknown"
+          [ -n "$etag" ] || etag="no-etag"
+          [ -n "$content_length" ] || content_length="unknown"
+
+          cache_segment="$(printf '%s|%s|%s\n' "$last_modified" "$etag" "$content_length" | sha256sum | cut -d' ' -f1)"
+
+          {
+            echo "last_modified=$last_modified"
+            echo "etag=$etag"
+            echo "content_length=$content_length"
+            echo "cache_segment=$cache_segment"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check if release is needed
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Tag-triggered releases always proceed
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # For scheduled/manual runs, check if a release already exists for today's DMG fingerprint
+          dmg_fingerprint="${{ steps.metadata.outputs.cache_segment }}"
+          release_tag="auto-${dmg_fingerprint:0:16}"
+
+          existing_release="$(gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json tagName --jq '.tagName' 2>/dev/null || true)"
+
+          if [ -n "$existing_release" ]; then
+            echo "Release '$release_tag' already exists for current DMG fingerprint. Skipping."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-and-release:
+    name: Build and Release
+    needs: detect-upstream
+    if: needs.detect-upstream.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full make g++ python3 curl unzip rpm
+
+      - name: Restore cached upstream DMG
+        id: dmg-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/codex-upstream-ci/Codex.dmg
+          key: upstream-dmg-${{ env.DMG_CACHE_SCHEMA_VERSION }}-${{ needs.detect-upstream.outputs.dmg_cache_key }}
+
+      - name: Download upstream DMG
+        if: steps.dmg-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$UPSTREAM_DMG_PATH")"
+          curl -fL --retry 3 -o "$UPSTREAM_DMG_PATH" "$UPSTREAM_DMG_URL"
+
+      - name: Record DMG fingerprint
+        id: dmg-info
+        run: |
+          set -euo pipefail
+          test -s "$UPSTREAM_DMG_PATH"
+          dmg_sha256="$(sha256sum "$UPSTREAM_DMG_PATH" | cut -d' ' -f1)"
+          echo "sha256=$dmg_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Build app from upstream DMG
+        run: CODEX_PATCH_REPORT_JSON="$GITHUB_WORKSPACE/patch-report.json" make build-app DMG="$UPSTREAM_DMG_PATH"
+
+      - name: Validate required upstream patches
+        run: node scripts/ci/validate-patch-report.js patch-report.json --profile upstream-build
+
+      - name: Build codex-update-manager
+        run: cargo build --release -p codex-update-manager
+
+      - name: Build Debian package
+        env:
+          PACKAGE_VERSION: ${{ needs.detect-upstream.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          UPDATER_BINARY_SOURCE="$PWD/target/release/codex-update-manager" \
+          PACKAGE_VERSION="$PACKAGE_VERSION" \
+            ./scripts/build-deb.sh
+
+      - name: Build RPM package
+        env:
+          PACKAGE_VERSION: ${{ needs.detect-upstream.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          UPDATER_BINARY_SOURCE="$PWD/target/release/codex-update-manager" \
+          PACKAGE_VERSION="$PACKAGE_VERSION" \
+            ./scripts/build-rpm.sh
+
+      - name: Download appimagetool
+        run: |
+          set -euo pipefail
+          arch="$(uname -m)"
+          appimagetool_url="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${arch}.AppImage"
+          curl -fL --retry 3 -o "$RUNNER_TEMP/appimagetool" "$appimagetool_url"
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          "$RUNNER_TEMP/appimagetool" --version
+
+      - name: Build AppImage
+        env:
+          PACKAGE_VERSION: ${{ needs.detect-upstream.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION="$PACKAGE_VERSION" \
+          APPIMAGE_EXTRACT_AND_RUN=1 \
+          APPIMAGETOOL="$RUNNER_TEMP/appimagetool" \
+            ./scripts/build-appimage.sh
+
+      - name: Build pacman package
+        env:
+          PACKAGE_VERSION: ${{ needs.detect-upstream.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e PACKAGE_VERSION="$PACKAGE_VERSION" \
+            -e PACKAGE_WITH_UPDATER=1 \
+            -v "$PWD:/work" \
+            -w /work \
+            archlinux:base-devel \
+            bash -lc '
+              set -euo pipefail
+              pacman -Syu --noconfirm --needed rust nodejs npm zstd sudo
+              useradd -m builder
+              chown -R builder:builder /work
+
+              runuser -u builder -- bash -lc '"'"'
+                set -euo pipefail
+                UPDATER_BINARY_SOURCE=/work/target/release/codex-update-manager \
+                PACKAGE_VERSION="$PACKAGE_VERSION" \
+                  ./scripts/build-pacman.sh
+              '"'"'
+            '
+
+      - name: Record build timestamp
+        id: build-ts
+        run: echo "ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          find dist -maxdepth 1 -type f \( \
+            -name '*.deb' -o \
+            -name '*.rpm' -o \
+            -name '*.pkg.tar.*' -o \
+            -name '*.AppImage' \
+          \) -print0 | sort -z | xargs -0 sha256sum > dist/SHA256SUMS
+
+      - name: List built packages
+        id: packages
+        run: |
+          set -euo pipefail
+          echo "## Built packages" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          for f in dist/*.deb dist/*.rpm dist/*.pkg.tar.* dist/*.AppImage dist/SHA256SUMS; do
+            [ -f "$f" ] || continue
+            echo "- \`$(basename "$f")\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Determine release tag
+        id: release-tag
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          else
+            dmg_fingerprint="${{ needs.detect-upstream.outputs.dmg_cache_key }}"
+            tag="auto-${dmg_fingerprint:0:16}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release-tag.outputs.tag }}
+          name: "Codex Desktop for Linux ${{ needs.detect-upstream.outputs.package_version }}"
+          body: |-
+            ## Codex Desktop for Linux `${{ needs.detect-upstream.outputs.package_version }}`
+
+            Automatically built from the upstream Codex DMG.
+
+            ### Upstream DMG Info
+            - URL: `${{ env.UPSTREAM_DMG_URL }}`
+            - SHA-256: `${{ steps.dmg-info.outputs.sha256 }}`
+            - Last-Modified: `${{ needs.detect-upstream.outputs.last_modified }}`
+            - ETag: `${{ needs.detect-upstream.outputs.etag }}`
+            - Content-Length: `${{ needs.detect-upstream.outputs.content_length }}`
+            - Metadata fingerprint: `${{ needs.detect-upstream.outputs.dmg_cache_key }}`
+            - Built at (UTC): `${{ steps.build-ts.outputs.ts }}`
+
+            ### Packages
+            | Format | File |
+            |--------|------|
+            | Debian/Ubuntu | `.deb` |
+            | Fedora/RHEL | `.rpm` |
+            | Arch Linux | `.pkg.tar.zst` |
+            | AppImage | `.AppImage` |
+
+            > **Note:** This is an unofficial Linux build. The official Codex Desktop is available for macOS and Windows.
+          files: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar.*
+            dist/*.AppImage
+            dist/SHA256SUMS
+            patch-report.json
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
