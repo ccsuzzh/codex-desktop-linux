@@ -22,16 +22,73 @@ env:
   DMG_CACHE_SCHEMA_VERSION: v1
 
 jobs:
+  sync-upstream:
+    name: Sync Upstream Source
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      upstream_sha: ${{ steps.source.outputs.upstream_sha }}
+      synced: ${{ steps.source.outputs.synced }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_type == 'tag' && github.ref_name || 'main' }}
+
+      - name: Merge upstream main into fork
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            source_sha="$(git rev-parse HEAD)"
+            {
+              echo "source_sha=$source_sha"
+              echo "upstream_sha="
+              echo "synced=false"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/ilysenko/codex-desktop-linux.git
+          git fetch upstream main
+
+          before_sha="$(git rev-parse HEAD)"
+          upstream_sha="$(git rev-parse upstream/main)"
+          git merge --no-edit upstream/main
+          source_sha="$(git rev-parse HEAD)"
+
+          synced=false
+          if [ "$source_sha" != "$before_sha" ]; then
+            git push origin HEAD:main
+            synced=true
+          fi
+
+          {
+            echo "source_sha=$source_sha"
+            echo "upstream_sha=$upstream_sha"
+            echo "synced=$synced"
+          } >> "$GITHUB_OUTPUT"
+
   detect-upstream:
     name: Detect Upstream Changes
+    needs: sync-upstream
     runs-on: ubuntu-latest
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
       dmg_cache_key: ${{ steps.metadata.outputs.cache_segment }}
+      release_tag: ${{ steps.check.outputs.release_tag }}
       last_modified: ${{ steps.metadata.outputs.last_modified }}
       etag: ${{ steps.metadata.outputs.etag }}
       content_length: ${{ steps.metadata.outputs.content_length }}
       package_version: ${{ steps.version.outputs.package_version }}
+      source_sha: ${{ needs.sync-upstream.outputs.source_sha }}
+      upstream_sha: ${{ needs.sync-upstream.outputs.upstream_sha }}
 
     steps:
       - name: Determine package version
@@ -84,9 +141,11 @@ jobs:
             exit 0
           fi
 
-          # For scheduled/manual runs, check if a release already exists for today's DMG fingerprint
+          # For scheduled/manual runs, check whether this upstream DMG and source commit were already released.
           dmg_fingerprint="${{ steps.metadata.outputs.cache_segment }}"
-          release_tag="auto-${dmg_fingerprint:0:16}"
+          source_sha="${{ needs.sync-upstream.outputs.source_sha }}"
+          release_tag="auto-${dmg_fingerprint:0:12}-${source_sha:0:12}"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
 
           existing_release="$(gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json tagName --jq '.tagName' 2>/dev/null || true)"
 
@@ -99,13 +158,17 @@ jobs:
 
   build-and-release:
     name: Build and Release
-    needs: detect-upstream
+    needs:
+      - sync-upstream
+      - detect-upstream
     if: needs.detect-upstream.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_type == 'tag' && github.ref_name || needs.sync-upstream.outputs.source_sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -252,8 +315,7 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             tag="${GITHUB_REF#refs/tags/}"
           else
-            dmg_fingerprint="${{ needs.detect-upstream.outputs.dmg_cache_key }}"
-            tag="auto-${dmg_fingerprint:0:16}"
+            tag="${{ needs.detect-upstream.outputs.release_tag }}"
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
@@ -275,6 +337,10 @@ jobs:
             - Content-Length: `${{ needs.detect-upstream.outputs.content_length }}`
             - Metadata fingerprint: `${{ needs.detect-upstream.outputs.dmg_cache_key }}`
             - Built at (UTC): `${{ steps.build-ts.outputs.ts }}`
+
+            ### Source Info
+            - Source commit: `${{ needs.detect-upstream.outputs.source_sha }}`
+            - Upstream main commit: `${{ needs.detect-upstream.outputs.upstream_sha }}`
 
             ### Packages
             | Format | File |
