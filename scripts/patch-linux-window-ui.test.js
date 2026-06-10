@@ -1738,6 +1738,30 @@ test("adds Linux build information request handlers for renderer settings", () =
   );
 });
 
+test("Linux build information helper locals do not shadow minified module bindings", () => {
+  const source =
+    "let a=require(`electron`),l=require(`node:fs`),s=require(`node:path`),e={bn:{help:`help`}};const h={\"get-global-state\":async({key:a})=>({value:this.globalState.get(a)}),\"set-global-state\":async({key:a,value:b,origin:c})=>(this.setGlobalStateValue(a,b,c),{success:!0})};let $e=[{role:`help`,id:e.bn.help,submenu:[{label:`Codex Documentation`,click:()=>{a.shell.openExternal(`https://developers.openai.com/codex/app`)}}]}],et=a.Menu.buildFromTemplate($e);a.Menu.setApplicationMenu(et);";
+  const patched = applyPatchTwice(applyLinuxBuildInfoTrayPatch, source);
+
+  assert.match(patched, /await a\.dialog\?\.showMessageBox/);
+  assert.match(patched, /\(0,s\.join\)\(process\.resourcesPath/);
+  assert.match(patched, /l\.existsSync\(__codexBuildInfoPath\)/);
+  assert.doesNotMatch(patched, /let a=await a\.dialog/);
+  assert.doesNotMatch(patched, /let s=\[\]/);
+});
+
+test("Linux build information request handlers are inserted into the handler table", () => {
+  const source =
+    "let a=require(`electron`),l=require(`node:fs`),s=require(`node:path`),e={bn:{help:`help`}};const h={\"is-copilot-api-available\":async()=>({available:!1}),\"get-global-state\":async({key:e})=>({value:this.globalState.get(e)}),\"set-global-state\":async({key:e,value:t,origin:n})=>(this.setGlobalStateValue(e,t,n),{success:!0})};let $e=[{role:`help`,id:e.bn.help,submenu:[{label:`Codex Documentation`,click:()=>{a.shell.openExternal(`https://developers.openai.com/codex/app`)}}]}],et=a.Menu.buildFromTemplate($e);a.Menu.setApplicationMenu(et);";
+  const patched = applyPatchTwice(applyLinuxBuildInfoTrayPatch, source);
+
+  assert.match(
+    patched,
+    /"is-copilot-api-available":async\(\)=>\(\{available:!1\}\),"codex-linux-get-build-info":async\(\)=>codexLinuxGetBuildInfo\(\),"codex-linux-open-build-info-commit"/,
+  );
+  assert.doesNotMatch(patched, /"is-copilot-api-available":async\(\)=>\(\{"codex-linux-get-build-info"/);
+});
+
 test("adds Linux build information to current tray menu shape", () => {
   const patched = applyPatchTwice(applyLinuxBuildInfoTrayPatch, `${mainBundlePrefix}${currentTrayMenuBundleFixture()}`);
 
@@ -1801,6 +1825,11 @@ test("adds Linux tray support for current minified window and startup identifier
     patched,
     /\(E\|\|process\.platform===`linux`&&\(typeof codexLinuxIsTrayEnabled!==`function`\|\|codexLinuxIsTrayEnabled\(\)\)\)&&ce\$\(\);/,
   );
+  assert.match(
+    patched,
+    /catch\(e\)\{O=!1;process\.platform===`linux`&&console\.warn\(`\[codex-linux\] Failed to set up system tray`,e\)\}/,
+  );
+  assert.equal((patched.match(/\[codex-linux\] Failed to set up system tray/g) ?? []).length, 1);
 });
 
 test("scopes dynamic tray startup matching to the tray initializer", () => {
@@ -1822,6 +1851,11 @@ test("scopes dynamic tray startup matching to the tray initializer", () => {
     patched,
     /\(E\|\|process\.platform===`linux`&&\(typeof codexLinuxIsTrayEnabled!==`function`\|\|codexLinuxIsTrayEnabled\(\)\)\)&&ce\$\(\);/,
   );
+  assert.match(patched, /catch\(e\)\{A=!1\}\};U&&startOther\(\);/);
+  assert.match(
+    patched,
+    /catch\(e\)\{O=!1;process\.platform===`linux`&&console\.warn\(`\[codex-linux\] Failed to set up system tray`,e\)\}/,
+  );
 });
 
 test("migrates Linux tray startup patch to tolerate missing settings helper", () => {
@@ -1835,6 +1869,28 @@ test("migrates Linux tray startup patch to tolerate missing settings helper", ()
   assert.match(
     patched,
     /\(E\|\|process\.platform===`linux`&&\(typeof codexLinuxIsTrayEnabled!==`function`\|\|codexLinuxIsTrayEnabled\(\)\)\)&&ce\$\(\);/,
+  );
+  assert.match(
+    patched,
+    /catch\(e\)\{O=!1;process\.platform===`linux`&&console\.warn\(`\[codex-linux\] Failed to set up system tray`,e\)\}/,
+  );
+});
+
+test("logs Linux tray setup failures when the catch body contains nested objects", () => {
+  const source = [
+    "async function s4(e){let t=await l4(e.buildFlavor,e.repoRoot),n=new a.Tray(t.defaultIcon);return n}",
+    "let _e=async()=>{k=!0;try{await s4({buildFlavor:o,repoRoot:M.repoRoot})}catch(e){k=!1,v.reportNonFatal(e instanceof Error?e:`Failed to set up tray`,{kind:`tray-setup-failed`,tags:{errorType:`tray-setup-failed`}}),N.ensureWindow()}};D&&_e();",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxTrayPatch, source, null);
+
+  assert.match(
+    patched,
+    /\(D\|\|process\.platform===`linux`&&\(typeof codexLinuxIsTrayEnabled!==`function`\|\|codexLinuxIsTrayEnabled\(\)\)\)&&_e\(\);/,
+  );
+  assert.match(
+    patched,
+    /N\.ensureWindow\(\);process\.platform===`linux`&&console\.warn\(`\[codex-linux\] Failed to set up system tray`,e\)\}/,
   );
 });
 
