@@ -3172,6 +3172,8 @@ PY
     assert_contains "$REPO_DIR/flake.nix" ".tmp/bundled-marketplaces/openai-bundled"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "Install it now? \\[Y/n\\]"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "is_interactive_terminal"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "LAUNCHER_INTERACTIVE_TERMINAL"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" 'detail=$(cat "$err" 2>/dev/null || true)'
     assert_contains "$REPO_DIR/updater/src/app.rs" "kdialog"
     assert_contains "$REPO_DIR/updater/src/app.rs" "zenity"
     assert_contains "$REPO_DIR/packaging/linux/codex-packaged-runtime.sh" "CHROME_DESKTOP"
