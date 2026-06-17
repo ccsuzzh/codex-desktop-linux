@@ -60,7 +60,20 @@ jobs:
 
           before_sha="$(git rev-parse HEAD)"
           upstream_sha="$(git rev-parse upstream/main)"
-          git merge --no-edit upstream/main
+          workflow_backup="$(mktemp -d)"
+          cp -a .github/workflows "$workflow_backup/workflows"
+
+          git merge --no-commit --no-ff upstream/main
+
+          rm -rf .github/workflows
+          mkdir -p .github
+          cp -a "$workflow_backup/workflows" .github/workflows
+          git add -A .github/workflows
+
+          if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+            git commit --allow-empty -m "Merge upstream main"
+          fi
+
           source_sha="$(git rev-parse HEAD)"
 
           synced=false
