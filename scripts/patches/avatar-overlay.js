@@ -147,6 +147,7 @@ function applyLinuxAvatarOverlayMousePassthroughPatch(currentSource) {
       ? patchedSource.includes("appearance:`avatarOverlay`") ? "already-applied" : "none"
       : "upstream",
   );
+  const avatarRecoveryAvailable = patchedSource.includes("codexLinuxAvatarPassthroughRecoveryTimer");
 
   const startDragPatch =
     `displayBounds:${electronVar}.screen.getDisplayNearestPoint(${electronVar}.screen.getCursorScreenPoint()).bounds},process.platform===\`linux\`&&(this.pointerInteractive=!0,this.applyPointerInteractivityPolicy())}moveDrag(e){`;
@@ -164,10 +165,12 @@ function applyLinuxAvatarOverlayMousePassthroughPatch(currentSource) {
     !patchedSource.includes(startDragPatch) &&
     patchedSource.includes("displayBounds:")
   ) {
-    recordStrategy("avatar-start-drag", "none");
-    console.warn(
-      "WARN: Could not find avatar overlay drag start — skipping Linux avatar overlay drag interactivity patch",
-    );
+    recordStrategy("avatar-start-drag", avatarRecoveryAvailable ? "covered-by-recovery" : "none");
+    if (!avatarRecoveryAvailable) {
+      console.warn(
+        "WARN: Could not find avatar overlay drag start — skipping Linux avatar overlay drag interactivity patch",
+      );
+    }
   }
 
   const endDragNeedle =
@@ -183,10 +186,12 @@ function applyLinuxAvatarOverlayMousePassthroughPatch(currentSource) {
     patchedSource.includes("avatar-overlay") &&
     patchedSource.includes("reclampWindowToVisibleDisplay(")
   ) {
-    recordStrategy("avatar-end-drag", "none");
-    console.warn(
-      "WARN: Could not find avatar overlay drag end — skipping Linux avatar overlay drag cleanup patch",
-    );
+    recordStrategy("avatar-end-drag", avatarRecoveryAvailable ? "covered-by-recovery" : "none");
+    if (!avatarRecoveryAvailable) {
+      console.warn(
+        "WARN: Could not find avatar overlay drag end — skipping Linux avatar overlay drag cleanup patch",
+      );
+    }
   }
 
   const setElementSizeMethod = findAvatarMethod(
@@ -266,10 +271,12 @@ function applyLinuxAvatarOverlayMousePassthroughPatch(currentSource) {
     patchedSource.includes("avatar-overlay") &&
     patchedSource.includes("sendLayoutToRenderer(")
   ) {
-    recordStrategy("avatar-apply-layout", "none");
-    console.warn(
-      "WARN: Could not find avatar overlay layout application — skipping Linux avatar overlay layout sync patch",
-    );
+    recordStrategy("avatar-apply-layout", avatarRecoveryAvailable ? "covered-by-recovery" : "none");
+    if (!avatarRecoveryAvailable) {
+      console.warn(
+        "WARN: Could not find avatar overlay layout application — skipping Linux avatar overlay layout sync patch",
+      );
+    }
   }
 
   const currentShowWindowRegex =
@@ -288,10 +295,12 @@ function applyLinuxAvatarOverlayMousePassthroughPatch(currentSource) {
     patchedSource.includes("avatar-overlay") &&
     patchedSource.includes("showWindowIfReady(")
   ) {
-    recordStrategy("avatar-show-window", "none");
-    console.warn(
-      "WARN: Could not find avatar overlay show window — skipping Linux avatar overlay show sync patch",
-    );
+    recordStrategy("avatar-show-window", avatarRecoveryAvailable ? "covered-by-recovery" : "none");
+    if (!avatarRecoveryAvailable) {
+      console.warn(
+        "WARN: Could not find avatar overlay show window — skipping Linux avatar overlay show sync patch",
+      );
+    }
   }
 
   const closedPatchRegex =

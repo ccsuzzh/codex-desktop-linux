@@ -2121,10 +2121,10 @@ test("keeps avatar overlay interactivity working after native presentation drift
   assert.match(patched, /this\.cancelMomentum\(\),this\.clearMovedWindowPersist\(\),this\.window=null/);
 });
 
-test("suppresses avatar overlay drift warnings when upstream removes drag/layout/show methods", () => {
-  // Fixture representing a future upstream that replaced displayBounds-based drag state,
-  // reclampWindowToVisibleDisplay, sendLayoutToRenderer, and showWindowIfReady with
-  // simpler implementations. The patch must skip the affected sub-patches silently.
+test("suppresses avatar overlay drift warnings when recovery covers drifted drag/layout/show methods", () => {
+  // Fixture representing a future upstream that still contains recognizable
+  // drag/layout/show keywords, but no longer has the exact companion method shapes.
+  // The recovery timer covers these auxiliary hooks, so this should stay quiet.
   const simplifiedUpstreamFixture = [
     "let n=require(`electron`);",
     "var u=require(`node:child_process`);",
@@ -2132,17 +2132,18 @@ test("suppresses avatar overlay drift warnings when upstream removes drag/layout
     "var fV=class{window=null;pointerInteractive=!1;mousePassthroughEnabled=!1;layout=null;mascotSize={width:112,height:121};traySize=null;traySize2=null;anchor={x:0,y:0};placement=`top-end`;momentumTimer=null;",
     "constructor(e,t){this.windowManager=e,this.globalState=t}",
     "isOpen(){let e=this.window;return e!=null&&!e.isDestroyed()&&e.isVisible()}",
-    // startDrag — no displayBounds:, no moveDrag companion (structural change)
-    "startDrag(e){let t=this.window;t==null||t.isDestroyed()||t.webContents.id!==e||this.applyPointerInteractivityPolicy()}",
-    // endDrag — no reclampWindowToVisibleDisplay (structural change)
-    "endDrag(e){let t=this.window;t==null||t.isDestroyed()||t.webContents.id!==e||this.applyPointerInteractivityPolicy()}",
+    // startDrag — keeps displayBounds, but no adjacent moveDrag companion shape.
+    "startDrag(e){let t=this.window;t==null||t.isDestroyed()||t.webContents.id!==e||(this.dragState={displayBounds:n.screen.getDisplayNearestPoint(n.screen.getCursorScreenPoint()).bounds},this.applyPointerInteractivityPolicy())}",
+    // endDrag — keeps reclampWindowToVisibleDisplay, but not the old exact body.
+    "endDrag(e){let t=this.window;t==null||t.isDestroyed()||t.webContents.id!==e||(this.dragState=null,this.reclampWindowToVisibleDisplay({shouldPersist:!0}),this.applyPointerInteractivityPolicy())}",
     // setElementSize — kept so avatar-element-size patch can apply
     "setElementSize(e,{mascot:t,tray:r}){let i=this.window;i==null||i.isDestroyed()||i.webContents.id!==e||(this.cancelMomentum(),this.anchor={...this.anchor,width:t.width,height:t.height},this.mascotSize=t,this.traySize=r,this.applyLayout(i))}",
     "async createWindow(e){let t=await this.windowManager.createWindow({appearance:`avatarOverlay`,focusable:!1,show:!1});return this.window=t,this.rendererReady=!1,this.dragState=null,this.layout=null,t.on(`closed`,()=>{this.window===t&&(this.cancelMomentum(),this.window=null,this.dragState=null,this.layout=null,this.rendererReady=!1,this.pointerInteractive=!1,this.mousePassthroughEnabled=!1)}),t}",
-    // applyLayout — no sendLayoutToRenderer (structural change), but keep i3 tray anchor pattern
-    "applyLayout(e){if(e.isDestroyed())return;let r=UB({anchor:this.anchor,traySize:this.traySize??sV});this.anchor=r.anchor,this.setWindowBounds(e,r.bounds)}",
-    // showWindow — no showWindowIfReady companion (structural change)
+    // applyLayout — keeps sendLayoutToRenderer, but not after the old setWindowBounds shape.
+    "applyLayout(e){if(e.isDestroyed())return;let r=UB({anchor:this.anchor,traySize:this.traySize??sV});this.anchor=r.anchor,this.sendLayoutToRenderer(e)}",
+    // showWindow — keeps showWindowIfReady, but not the old condition shape.
     "showWindow(e){if(e.isDestroyed())return;let t=this.isOpen();e.moveTop(),e.showInactive(),!t&&this.isOpen()&&this.broadcastOpenState()}",
+    "showWindowIfReady(e){e?.isDestroyed?.()||this.showWindow(e)}",
     "broadcastOpenState(){this.windowManager.sendMessageToAllRegisteredWindows({type:`avatar-overlay-open-state-changed`,isOpen:this.isOpen()})}",
     // Simple applyPointerInteractivityPolicy — matches interactivityNeedle
     "applyPointerInteractivityPolicy(){let e=this.window;if(e==null||e.isDestroyed()){this.mousePassthroughEnabled=!1;return}let t=!this.pointerInteractive;if(this.mousePassthroughEnabled!==t){if(this.mousePassthroughEnabled=t,t){e.setIgnoreMouseEvents(!0,{forward:!0});return}e.setIgnoreMouseEvents(!1),this.refreshCursorAtCurrentMousePosition(e)}}",
