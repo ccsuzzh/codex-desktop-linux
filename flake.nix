@@ -81,10 +81,10 @@
 
         codexDmg = pkgs.fetchurl {
           url = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
-          hash = "sha256-H9330Ap7VwZf2aJJmyMNXHvLo7NwpqZypj/8jTI3oXg=";
+          hash = "sha256-MdjiZmoIlagw3wgy3ECDroKm6b0mYDFBwCk6zqZhghE=";
         };
 
-        codexVersion = "26.609.71450";
+        codexVersion = "26.611.62324";
         electronVersion = "42.1.0";
         electronPlatform =
           {
