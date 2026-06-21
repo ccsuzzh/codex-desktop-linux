@@ -101,6 +101,9 @@ const halfPatchedCurrentComposerControlSource =
 const halfPatchedCurrentComposerControlSourceWithFallbackAliases =
   "function hz(e){let{conversationId:l,isResponseInProgress:T,onStop:k,submitBlockReason:A,voiceControls:F}=e,I=h===void 0?!1:h,L=mu(),R=fu(L,tg),z=fu(L,eg),{enterBehavior:B}=Ul(),V=Wt(),{canRetryDictation:ee,dictationShortcutLabel:te,isDictating:ne,isDictationSupported:re,isNewRealtimeConversationAvailable:ae,isRealtimeSubmitStarting:U,isTranscribing:W,startDictation:oe,startRealtimeConversation:se,stopDictation:ce,threadRealtime:J}=F;let Fe=Pe,Ie=A===`empty-message`&&!T&&(J.isAvailable&&J.phase!==`active`||ae),Le=a(Po,`composer.startVoiceMode`),Re;Re=()=>{if(globalThis.codexLinuxConversationToggle?.({conversationId:v,startDictation:oe,stopDictation:ce,onStop:P,isDictating:ne,isTranscribing:W,isResponseInProgress:A,isDictationSupported:re}))return;if(J.phase===`starting`||J.phase===`active`){J.stopRealtime();return}if(J.isAvailable){J.phase===`inactive`&&se();return}se()};}";
 
+const driftedCurrentComposerControlSource =
+  "function hz(e){let{conversationId:l,isResponseInProgress:T,onStop:k,submitBlockReason:A,voiceControls:F}=e,I=h===void 0?!1:h,L=mu(),R=fu(L,tg),z=fu(L,eg),{enterBehavior:B}=Ul(),V=Wt(),{canRetryDictation:ee,dictationShortcutLabel:te,isDictating:ne,isDictationSupported:re,isNewRealtimeConversationAvailable:ae,isRealtimeSubmitStarting:U,isTranscribing:W,startDictation:oe,startRealtimeConversation:se,stopDictation:ce,threadRealtime:J}=M;let Fe=Pe,Ie=A===`empty-message`&&!T&&(J.isAvailable&&J.phase!==`active`||ae),Le=a(Po,`composer.startVoiceMode`),Re;Re=()=>{if(J.phase===`starting`||J.phase===`active`){J.stopRealtime();return}if(J.isAvailable){J.phase===`inactive`&&se();return}se()};}";
+
 const assistantRenderSource =
   "return (0,$.jsx)(Ov,{item:n,alwaysShowActions:M,assistantCopyText:p,turnId:m,after:g,conversationId:o,cwd:u,renderCodeBlocksAsWritingBlocks:V})";
 
@@ -1786,6 +1789,19 @@ test("composer control patch repairs stale fallback aliases in existing toggle p
   assert.doesNotMatch(patched, /conversationId:v,startDictation:oe/);
   assert.doesNotMatch(patched, /onStop:P/);
   assert.doesNotMatch(patched, /isResponseInProgress:A,isDictationSupported:re/);
+});
+
+test("composer control patch skips current payloads when scoped aliases drift", () => {
+  const { value: patched, warnings } = captureWarns(() =>
+    twice(applyComposerControlPatch, driftedCurrentComposerControlSource),
+  );
+  assert.equal(patched, driftedCurrentComposerControlSource);
+  assert.match(warnings.join("\n"), /Could not resolve composer prop aliases/);
+  assert.match(warnings.join("\n"), /Could not find composer voice button click handler/);
+  assert.doesNotMatch(patched, /codexLinuxConversationSync/);
+  assert.doesNotMatch(patched, /codexLinuxConversationToggle/);
+  assert.doesNotMatch(patched, /conversationId:v/);
+  assert.doesNotMatch(patched, /onStop:P/);
 });
 
 test("composer patch ignores adjacent composer chunks", () => {

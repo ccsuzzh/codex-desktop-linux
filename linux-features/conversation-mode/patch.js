@@ -180,7 +180,18 @@ function composerPropVar(source, name, fallback) {
   return objectPropVar(currentBinding.propsObject, name, fallback);
 }
 
+function isLegacyComposerControlShape(source) {
+  return (
+    new RegExp(`\\{\\s*voiceControls:${JS_IDENT}\\s*\\}\\s*=\\s*${JS_IDENT}`).test(source) &&
+    source.includes("F===`empty-message`&&!A") &&
+    source.includes("ue.isAvailable&&ue.phase!==`active`")
+  );
+}
+
 function composerPropVars(source) {
+  if (currentComposerBinding(source) == null && !isLegacyComposerControlShape(source)) {
+    return null;
+  }
   return {
     conversationId: composerPropVar(source, "conversationId", "v"),
     isResponseInProgress: composerPropVar(source, "isResponseInProgress", "A"),
@@ -236,32 +247,36 @@ function applyComposerControlPatch(source) {
   let patched = source;
   const vars = composerVoiceVars(patched);
   const props = composerPropVars(patched);
-  const visiblePattern = new RegExp(
-    `let (${JS_IDENT})=(${JS_IDENT}),(${JS_IDENT})=${escapeRegExp(props.submitBlockReason)}` +
-      '===`empty-message`' +
-      `&&!${escapeRegExp(props.isResponseInProgress)}&&\\((?:(${JS_IDENT})&&)?` +
-      `${escapeRegExp(vars.threadRealtime)}\\.isAvailable&&${escapeRegExp(vars.threadRealtime)}\\.phase!==` +
-      '`active`' +
-      `\\|\\|(${JS_IDENT})\\),(${JS_IDENT})=(${JS_IDENT})\\((${JS_IDENT}),` +
-      '`composer\\.startVoiceMode`' +
-      "\\)",
-  );
-  const visibleMatch = patched.match(visiblePattern);
-  if (visibleMatch && !patched.includes(`codexLinuxConversationSync?.(${props.conversationId}`)) {
-    const labelVar = visibleMatch[1];
-    const labelSrc = visibleMatch[2];
-    const visVar = visibleMatch[3];
-    const existingRealtimeAvailable = visibleMatch[4] == null ? "" : `${visibleMatch[4]}&&`;
-    const realtimeAvailable = visibleMatch[5] || vars.isNewRealtimeConversationAvailable;
-    const shortcutResultVar = visibleMatch[6];
-    const shortcutFn = visibleMatch[7];
-    const shortcutArg = visibleMatch[8];
-    patched = patched.replace(
-      visiblePattern,
-      `let ${labelVar}=${labelSrc};globalThis.codexLinuxConversationSync?.(${props.conversationId},{${composerSyncPayload(vars, props)}});let codexLinuxConversationActive=globalThis.codexLinuxConversationIsActive?.(${props.conversationId})===!0,${visVar}=codexLinuxConversationActive||${props.submitBlockReason}===\`empty-message\`&&!${props.isResponseInProgress}&&((${props.conversationId}&&globalThis.codexLinuxConversationAvailable?.())||${existingRealtimeAvailable}${vars.threadRealtime}.isAvailable&&${vars.threadRealtime}.phase!==\`active\`||${realtimeAvailable}),${shortcutResultVar}=${shortcutFn}(${shortcutArg},\`composer.startVoiceMode\`)`,
+  if (props == null) {
+    warn("Could not resolve composer prop aliases", "conversation mode composer control patch");
+  } else {
+    const visiblePattern = new RegExp(
+      `let (${JS_IDENT})=(${JS_IDENT}),(${JS_IDENT})=${escapeRegExp(props.submitBlockReason)}` +
+        '===`empty-message`' +
+        `&&!${escapeRegExp(props.isResponseInProgress)}&&\\((?:(${JS_IDENT})&&)?` +
+        `${escapeRegExp(vars.threadRealtime)}\\.isAvailable&&${escapeRegExp(vars.threadRealtime)}\\.phase!==` +
+        '`active`' +
+        `\\|\\|(${JS_IDENT})\\),(${JS_IDENT})=(${JS_IDENT})\\((${JS_IDENT}),` +
+        '`composer\\.startVoiceMode`' +
+        "\\)",
     );
-  } else if (!patched.includes(`codexLinuxConversationSync?.(${props.conversationId}`)) {
-    warn("Could not find composer voice button visibility gate", "conversation mode composer control patch");
+    const visibleMatch = patched.match(visiblePattern);
+    if (visibleMatch && !patched.includes(`codexLinuxConversationSync?.(${props.conversationId}`)) {
+      const labelVar = visibleMatch[1];
+      const labelSrc = visibleMatch[2];
+      const visVar = visibleMatch[3];
+      const existingRealtimeAvailable = visibleMatch[4] == null ? "" : `${visibleMatch[4]}&&`;
+      const realtimeAvailable = visibleMatch[5] || vars.isNewRealtimeConversationAvailable;
+      const shortcutResultVar = visibleMatch[6];
+      const shortcutFn = visibleMatch[7];
+      const shortcutArg = visibleMatch[8];
+      patched = patched.replace(
+        visiblePattern,
+        `let ${labelVar}=${labelSrc};globalThis.codexLinuxConversationSync?.(${props.conversationId},{${composerSyncPayload(vars, props)}});let codexLinuxConversationActive=globalThis.codexLinuxConversationIsActive?.(${props.conversationId})===!0,${visVar}=codexLinuxConversationActive||${props.submitBlockReason}===\`empty-message\`&&!${props.isResponseInProgress}&&((${props.conversationId}&&globalThis.codexLinuxConversationAvailable?.())||${existingRealtimeAvailable}${vars.threadRealtime}.isAvailable&&${vars.threadRealtime}.phase!==\`active\`||${realtimeAvailable}),${shortcutResultVar}=${shortcutFn}(${shortcutArg},\`composer.startVoiceMode\`)`,
+      );
+    } else if (!patched.includes(`codexLinuxConversationSync?.(${props.conversationId}`)) {
+      warn("Could not find composer voice button visibility gate", "conversation mode composer control patch");
+    }
   }
 
   const threadRealtime = escapeRegExp(vars.threadRealtime);
@@ -273,27 +288,31 @@ function applyComposerControlPatch(source) {
   const currentClickPattern = new RegExp(
     `([A-Za-z_$][\\w$]*)=\\(\\)=>\\{if\\(${threadRealtime}\\.phase===\`starting\`\\|\\|${threadRealtime}\\.phase===\`active\`\\)\\{${threadRealtime}\\.stopRealtime\\(\\);return\\}if\\(${threadRealtime}\\.isAvailable\\)\\{${threadRealtime}\\.phase===\`inactive\`&&${currentStartRealtimeConversation}\\(\\);return\\}${currentStartRealtimeConversation}\\(\\)\\}`,
   );
-  const togglePattern = new RegExp(
-    `codexLinuxConversationToggle\\?\\.\\(\\{conversationId:${escapeRegExp(props.conversationId)},startDictation:${JS_IDENT},stopDictation:${JS_IDENT},onStop:${escapeRegExp(props.onStop)},isDictating:${JS_IDENT},isTranscribing:${JS_IDENT},isResponseInProgress:${escapeRegExp(props.isResponseInProgress)},isDictationSupported:${JS_IDENT}\\}\\)`,
-  );
   const anyTogglePattern = new RegExp(
     `codexLinuxConversationToggle\\?\\.\\(\\{conversationId:${JS_IDENT},startDictation:${JS_IDENT},stopDictation:${JS_IDENT},onStop:${JS_IDENT},isDictating:${JS_IDENT},isTranscribing:${JS_IDENT},isResponseInProgress:${JS_IDENT},isDictationSupported:${JS_IDENT}\\}\\)`,
   );
-  const toggleCall = `codexLinuxConversationToggle?.({${composerTogglePayload(vars, props)}})`;
-  if (legacyClickPattern.test(patched)) {
-    patched = patched.replace(
-      legacyClickPattern,
-      `$1=()=>{if(globalThis.${toggleCall})return;if(${vars.threadRealtime}.phase===\`starting\`||${vars.threadRealtime}.phase===\`active\`){${vars.threadRealtime}.stopRealtime();return}if(${vars.threadRealtime}.isAvailable){${vars.threadRealtime}.phase===\`inactive\`&&${vars.threadRealtime}.startRealtime(\`composer_button_existing_thread\`);return}${vars.startNewRealtimeConversation}()}`,
+  if (props != null) {
+    const togglePattern = new RegExp(
+      `codexLinuxConversationToggle\\?\\.\\(\\{conversationId:${escapeRegExp(props.conversationId)},startDictation:${JS_IDENT},stopDictation:${JS_IDENT},onStop:${escapeRegExp(props.onStop)},isDictating:${JS_IDENT},isTranscribing:${JS_IDENT},isResponseInProgress:${escapeRegExp(props.isResponseInProgress)},isDictationSupported:${JS_IDENT}\\}\\)`,
     );
-  } else if (currentClickPattern.test(patched)) {
-    patched = patched.replace(
-      currentClickPattern,
-      `$1=()=>{if(globalThis.${toggleCall})return;if(${vars.threadRealtime}.phase===\`starting\`||${vars.threadRealtime}.phase===\`active\`){${vars.threadRealtime}.stopRealtime();return}if(${vars.threadRealtime}.isAvailable){${vars.threadRealtime}.phase===\`inactive\`&&${vars.startRealtimeConversation}();return}${vars.startRealtimeConversation}()}`,
-    );
-  } else if (togglePattern.test(patched)) {
-    patched = patched.replace(togglePattern, toggleCall);
-  } else if (anyTogglePattern.test(patched)) {
-    patched = patched.replace(anyTogglePattern, toggleCall);
+    const toggleCall = `codexLinuxConversationToggle?.({${composerTogglePayload(vars, props)}})`;
+    if (legacyClickPattern.test(patched)) {
+      patched = patched.replace(
+        legacyClickPattern,
+        `$1=()=>{if(globalThis.${toggleCall})return;if(${vars.threadRealtime}.phase===\`starting\`||${vars.threadRealtime}.phase===\`active\`){${vars.threadRealtime}.stopRealtime();return}if(${vars.threadRealtime}.isAvailable){${vars.threadRealtime}.phase===\`inactive\`&&${vars.threadRealtime}.startRealtime(\`composer_button_existing_thread\`);return}${vars.startNewRealtimeConversation}()}`,
+      );
+    } else if (currentClickPattern.test(patched)) {
+      patched = patched.replace(
+        currentClickPattern,
+        `$1=()=>{if(globalThis.${toggleCall})return;if(${vars.threadRealtime}.phase===\`starting\`||${vars.threadRealtime}.phase===\`active\`){${vars.threadRealtime}.stopRealtime();return}if(${vars.threadRealtime}.isAvailable){${vars.threadRealtime}.phase===\`inactive\`&&${vars.startRealtimeConversation}();return}${vars.startRealtimeConversation}()}`,
+      );
+    } else if (togglePattern.test(patched)) {
+      patched = patched.replace(togglePattern, toggleCall);
+    } else if (anyTogglePattern.test(patched)) {
+      patched = patched.replace(anyTogglePattern, toggleCall);
+    } else if (!patched.includes("codexLinuxConversationToggle")) {
+      warn("Could not find composer voice button click handler", "conversation mode composer control patch");
+    }
   } else if (!patched.includes("codexLinuxConversationToggle")) {
     warn("Could not find composer voice button click handler", "conversation mode composer control patch");
   }
