@@ -2948,6 +2948,7 @@ webview_probe_body = source.split("webview_port_is_open() {", 1)[1].split("wait_
 wait_body = source.split("wait_for_webview_server() {", 1)[1].split("verify_webview_origin() {", 1)[0]
 send_body = source.split("send_warm_start_launch_action() {", 1)[1].split("webview_origin_is_reachable() {", 1)[0]
 prelaunch_hooks_body = source.split("run_feature_prelaunch_hooks() {", 1)[1].split("bundled_plugin_version() {", 1)[0]
+launcher_hooks_body = source.split("run_feature_launcher_hooks() {", 1)[1].split("build_electron_launch_args() {", 1)[0]
 cold_start_hooks_body = source.split("run_cold_start_hooks() {", 1)[1].split("run_cli_preflight() {", 1)[0]
 stop_body = source.split("stop_owned_webview_server() {", 1)[1].split("owned_webview_server_pid() {", 1)[0]
 stale_body = source.split("pid_is_stale_webview_server() {", 1)[1].split("stop_owned_webview_server() {", 1)[0]
@@ -3000,6 +3001,12 @@ if "client.shutdown(socket.SHUT_WR)" not in send_body or "response = client.recv
     raise SystemExit("warm-start IPC client must read the Electron socket acknowledgement")
 if 'launch_electron "${LAUNCHER_ARGS[@]}"' not in source:
     raise SystemExit("Electron launch must receive sanitized launcher args")
+if 'FEATURE_LAUNCHER_HOOK_DIR="$SCRIPT_DIR/.codex-linux/launcher.d"' not in source:
+    raise SystemExit("launcher must expose a generic Linux feature launcher hook directory")
+if launch_body.index("run_feature_launcher_hooks") > launch_body.index("build_electron_launch_args"):
+    raise SystemExit("Linux feature launcher hooks must run before final Electron launch args are built")
+if "configure_electron_proxy_from_env" in source or "CODEX_LINUX_PROXY_SERVER=URL" in source:
+    raise SystemExit("authenticated proxy setup must live in an opt-in Linux feature, not the core launcher")
 if 'Adopted concurrently-started verified webview server' not in source:
     raise SystemExit("launcher must tolerate a concurrent verified webview server winning the bind race")
 if 'set_detected_running_app "$pid"' not in detect_body:
@@ -3083,11 +3090,17 @@ if "if needs_cold_start;" not in runtime_body:
     raise SystemExit("second-instance handoff must skip CLI preflight")
 if 'run_cold_start_hooks' not in runtime_body:
     raise SystemExit("cold start must run feature-staged hooks before Electron launches")
-for name, body in (("prelaunch", prelaunch_hooks_body), ("cold-start", cold_start_hooks_body)):
+for name, body in (("prelaunch", prelaunch_hooks_body), ("cold-start", cold_start_hooks_body), ("launcher", launcher_hooks_body)):
     if 'CODEX_HOME="$CODEX_HOME"' not in body:
         raise SystemExit(f"launcher {name} hooks must receive resolved CODEX_HOME")
     if 'CODEX_LINUX_FEATURES_DIR="$CODEX_LINUX_FEATURES_DIR"' not in body:
         raise SystemExit(f"launcher {name} hooks must receive the app-local Linux feature resource directory")
+if 'CODEX_LINUX_FEATURE_HOOK_PHASE=launcher' not in launcher_hooks_body:
+    raise SystemExit("launcher hooks must receive their hook phase")
+if '"$hook" "${ELECTRON_ARGS[@]}"' not in launcher_hooks_body:
+    raise SystemExit("launcher hooks must receive current Electron args as argv")
+if 'env\\ *)' not in launcher_hooks_body or 'electron-arg\\ *)' not in launcher_hooks_body:
+    raise SystemExit("launcher hooks must use the generic env/electron-arg stdout protocol")
 if 'COLD_START_HOOK_DIR' not in cold_start_hooks_body or '"$hook" "$SCRIPT_DIR" "$APP_STATE_DIR" "$LOG_DIR"' not in cold_start_hooks_body:
     raise SystemExit("launcher cold-start hook runner must be generic and pass standard paths")
 if '>>"$LOG_FILE" 2>&1 &' not in cold_start_hooks_body:
@@ -3182,13 +3195,18 @@ probe = "#!/usr/bin/env bash\n" + source[start:end] + r'''
 set -Eeuo pipefail
 
 CODEX_LINUX_APP_ID="${CODEX_LINUX_APP_ID:-codex-desktop}"
+SCRIPT_DIR="${SCRIPT_DIR:-/tmp/codex-launcher-probe-app}"
+CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 APP_STATE_DIR="${APP_STATE_DIR:-/tmp/codex-launcher-probe-state}"
 APP_CONFIG_DIR="${APP_CONFIG_DIR:-/tmp/codex-launcher-probe-config.$$}"
 USER_ELECTRON_FLAGS_FILE="${USER_ELECTRON_FLAGS_FILE:-$APP_CONFIG_DIR/electron-flags.conf}"
+LOG_FILE="${LOG_FILE:-/tmp/codex-launcher-probe.log}"
+CODEX_LINUX_FEATURES_DIR="${CODEX_LINUX_FEATURES_DIR:-$SCRIPT_DIR/.codex-linux/features}"
 FEATURE_ELECTRON_ARGS_DIR="${FEATURE_ELECTRON_ARGS_DIR:-}"
+FEATURE_LAUNCHER_HOOK_DIR="${FEATURE_LAUNCHER_HOOK_DIR:-}"
 
 print_state() {
-    printf 'mode=%s wslg=%s ozone_platform=%s ozone_hint=%s gpu=%s gpu_arg=%s comp=%s gl_added=%s renderer_accessibility=%s launch=' \
+    printf 'mode=%s wslg=%s ozone_platform=%s ozone_hint=%s gpu=%s gpu_arg=%s comp=%s gl_added=%s renderer_accessibility=%s hook_value=%s hook_saw_arg=%s launch=' \
         "$ELECTRON_RENDERING_MODE" \
         "$ELECTRON_WSLG_DETECTED" \
         "${ELECTRON_OZONE_PLATFORM:-}" \
@@ -3197,7 +3215,9 @@ print_state() {
         "$ELECTRON_GPU_DISABLE_SWITCH_IN_ARGS" \
         "$ELECTRON_GPU_COMPOSITING_DISABLED" \
         "$ELECTRON_GL_SWITCH_ADDED" \
-        "$ELECTRON_RENDERER_ACCESSIBILITY_FORCED"
+        "$ELECTRON_RENDERER_ACCESSIBILITY_FORCED" \
+        "${CODEX_TEST_LAUNCHER_HOOK_VALUE:-}" \
+        "${CODEX_TEST_LAUNCHER_HOOK_SAW_ARG:-}"
     for arg in "${ELECTRON_LAUNCH_ARGS[@]}"; do
         printf '<%s>' "$arg"
     done
@@ -3214,6 +3234,7 @@ case "${1:-}" in
         load_feature_electron_args
         load_user_electron_flags
         set_electron_defaults "${FEATURE_ELECTRON_ARGS[@]}" "${USER_ELECTRON_FLAGS[@]}" "$@"
+        run_feature_launcher_hooks
         build_electron_launch_args
         print_state
         ;;
@@ -3246,6 +3267,25 @@ PY
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe -- --ozone-platform=x11)"
     [[ "$output" == *"electron=<--ozone-platform=x11>"* ]] || fail "pass-through ozone platform must reach Electron: $output"
     [[ "$output" != *"<--ozone-platform-hint=auto>"* ]] || fail "launcher must not add ozone hint when pass-through supplies an ozone platform: $output"
+
+    local feature_launcher_hook_dir="$TMP_DIR/feature-launcher-hooks"
+    mkdir -p "$feature_launcher_hook_dir"
+    cat > "$feature_launcher_hook_dir/generic-hook" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'env CODEX_TEST_LAUNCHER_HOOK_VALUE=from-hook'
+printf '%s\n' 'electron-arg --test-feature-launcher-hook=1'
+printf '%s\n' 'electron-arg --enable-features=TestHookFeature'
+for arg in "$@"; do
+    if [ "$arg" = "--existing-electron-arg" ]; then
+        printf '%s\n' 'env CODEX_TEST_LAUNCHER_HOOK_SAW_ARG=1'
+    fi
+done
+EOF
+    chmod +x "$feature_launcher_hook_dir/generic-hook"
+    output="$(env -i PATH="$PATH" HOME="$HOME" FEATURE_LAUNCHER_HOOK_DIR="$feature_launcher_hook_dir" CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe -- --existing-electron-arg)"
+    [[ "$output" == *"hook_value=from-hook hook_saw_arg=1"* ]] || fail "launcher hook must contribute environment variables and receive current Electron args: $output"
+    [[ "$output" == *"electron=<--existing-electron-arg><--test-feature-launcher-hook=1>"* ]] || fail "launcher hook must append Electron args after existing args: $output"
+    [[ "$output" == *"<--enable-features=TestHookFeature>"* ]] || fail "launcher hook enable-features output must merge into launch args: $output"
 
     local user_flags_dir="$TMP_DIR/user-electron-flags"
     local user_flags_file="$user_flags_dir/electron-flags.conf"
@@ -5282,18 +5322,24 @@ test_linux_computer_use_ui_opt_in_smoke() {
     local output_log="$workspace/output.log"
     local main_bundle="$extracted/.vite/build/main-test.js"
     local renderer_asset="$extracted/webview/assets/use-model-settings-test.js"
+    local current_renderer_asset="$extracted/webview/assets/use-is-plugins-enabled-current-test.js"
     local install_flow_asset="$extracted/webview/assets/use-plugin-install-flow-test.js"
+    local native_apps_asset="$extracted/webview/assets/use-native-apps.electron-test.js"
     local bundle_body
     local renderer_body
+    local current_renderer_body
     local install_flow_body
+    local native_apps_body
 
     mkdir -p "$workspace" "$fake_home/.config/codex-desktop"
 
     bundle_body="$(cat <<'JS'
 let n={app:{whenReady(){},quit(){},requestSingleInstanceLock(){},on(){},off(){}}};
+let cp=require(`node:child_process`),fs=require(`node:fs`),p=require(`node:path`),os=require(`node:os`);
 let Qt=`openai-bundled`,$t=`browser-use`,en=`chrome-internal`,tn=`computer-use`,nn=`latex-tectonic`;
 var $n=[{name:tn,isEnabled:({features:e,platform:t})=>t===`darwin`&&e.computerUse,migrate:wn}];
 function me(e,{env:t=process.env,platform:n=process.platform}={}){return n!==`win32`||t.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==`1`?e:{...e,computerUse:!0,computerUseNodeRepl:!0}}
+var h={handlers:{"native-desktop-apps":async()=>({apps:[]})}};
 JS
 )"
     renderer_body="$(cat <<'JS'
@@ -5301,11 +5347,23 @@ function hae(e){return e===`macOS`||e===`windows`}
 function RS(e){let t=(0,q.c)(8),{enabled:n,hostId:r,isHostLocal:i}=e,a=n===void 0?!0:n,o=r===void 0?R:r,s=Kn(),{isLoading:c,platform:l}=Hr(),u=Vn(`1506311413`),d;t[0]===o?d=t[1]:(d={featureName:`computer_use`,hostId:o},t[0]=o,t[1]=d);let f=LS(d),p;t[2]===l?p=t[3]:(p=hae(l),t[2]=l,t[3]=p);let m=a&&i&&s===`electron`&&u&&(c||p),h=m&&!c&&f.enabled&&!f.isLoading,g=m&&f.isLoading,_=m&&(c||f.isLoading),v;return v}
 JS
 )"
+    current_renderer_body="$(cat <<'JS'
+function b(e){return e===`macOS`||e===`windows`}
+function x(e){let t=(0,_.c)(16),{enabled:n,hostId:r}=e,i=n===void 0?!0:n,{isLoading:a,platform:o}=m(),s=u(`1506311413`),c;t[0]===r?c=t[1]:(c={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=c);let l=v(c),d=o===`windows`&&!a,f=i&&d,p;t[2]===f?p=t[3]:(p={enabled:f},t[2]=f,t[3]=p);let h=S(p),g=l.isLoading||d&&h.isLoading,y=l.enabled&&(!d||h.enabled),x;t[4]!==y||t[5]!==i||t[6]!==g||t[7]!==s||t[8]!==a||t[9]!==o?(x=w({areRequiredFeaturesEnabled:y,enabled:i,isAnyFeatureLoading:g,isComputerUseGateEnabled:s,isHostCompatiblePlatform:b(o),isPlatformLoading:a,windowType:`electron`}),t[4]=y,t[5]=i,t[6]=g,t[7]=s,t[8]=a,t[9]=o,t[10]=x):x=t[10];return x}
+JS
+)"
     install_flow_body='function Qe({forceReloadPlugins:e,hostId:t}){let ne=f({featureName:`computer_use`,hostId:t}),re=!ne.isLoading&&ne.enabled,[L,R]=(0,Z.useState)({});return re}'
+    native_apps_body="$(cat <<'JS'
+function d(e){return e.find(e=>e.plugin.name===`computer-use`)??null}
+function C(e){let t=(0,S.c)(9),{enabled:n}=e,{platform:a,isLoading:o}=c(),s=n&&(a===`macOS`||a===`windows`),l;t[0]===Symbol.for(`react.memo_cache_sentinel`)?(l={order:`usage`},t[0]=l):l=t[0];let u;t[1]===s?u=t[2]:(u={params:l,queryConfig:{enabled:s,staleTime:i.FIVE_MINUTES,refetchOnWindowFocus:!1}},t[1]=s,t[2]=u);let d=r(`native-desktop-apps`,u);return d}
+JS
+)"
 
     make_fake_extracted_asar "$extracted" "$bundle_body"
     printf '%s\n' "$renderer_body" > "$renderer_asset"
+    printf '%s\n' "$current_renderer_body" > "$current_renderer_asset"
     printf '%s\n' "$install_flow_body" > "$install_flow_asset"
+    printf '%s\n' "$native_apps_body" > "$native_apps_asset"
 
     # Branch 1: no env var, no settings.json — only the plugin manifest gate runs.
     HOME="$fake_home" XDG_CONFIG_HOME= unset_env_value="" \
@@ -5314,35 +5372,50 @@ JS
         node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_contains "$main_bundle" '(t===`darwin`||t===`linux`)&&e.computerUse'
     assert_not_contains "$main_bundle" 'return n===`linux`?{...e,computerUse:!0,computerUseNodeRepl:!0}'
+    assert_not_contains "$main_bundle" 'codexLinuxNativeDesktopApps'
     assert_not_contains "$renderer_asset" 'function hae(e){return e===`macOS`||e===`windows`||e===`linux`}'
+    assert_not_contains "$current_renderer_asset" 'areRequiredFeaturesEnabled:o===`linux`||y'
+    assert_not_contains "$native_apps_asset" 'a===`macOS`||a===`windows`||a===`linux`'
     assert_not_contains "$install_flow_asset" 'navigator.userAgent.includes(`Linux`)'
 
-    # Branch 2: env var opts in — all four patches apply.
-    rm "$main_bundle" "$renderer_asset" "$install_flow_asset"
+    # Branch 2: env var opts in — all Computer Use UI patches apply.
+    rm "$main_bundle" "$renderer_asset" "$current_renderer_asset" "$install_flow_asset" "$native_apps_asset"
     printf '%s\n' "$bundle_body" > "$main_bundle"
     printf '%s\n' "$renderer_body" > "$renderer_asset"
+    printf '%s\n' "$current_renderer_body" > "$current_renderer_asset"
     printf '%s\n' "$install_flow_body" > "$install_flow_asset"
+    printf '%s\n' "$native_apps_body" > "$native_apps_asset"
 
     env -u CODEX_LINUX_APP_ID -u CODEX_APP_ID -u CODEX_LINUX_SETTINGS_FILE \
         CODEX_LINUX_ENABLE_COMPUTER_USE_UI=1 HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" \
         node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_contains "$main_bundle" '(t===`darwin`||t===`linux`)&&e.computerUse'
     assert_contains "$main_bundle" 'return n===`linux`?{...e,computerUse:!0,computerUseNodeRepl:!0}'
+    assert_contains "$main_bundle" 'codexLinuxNativeDesktopApps'
+    assert_contains "$main_bundle" '"computer-use-native-desktop-app-icon":async(e)=>process.platform===`linux`?codexLinuxNativeDesktopAppIcon(e):{iconSmall:``}'
     assert_contains "$renderer_asset" 'function hae(e){return e===`macOS`||e===`windows`||e===`linux`}'
+    assert_contains "$current_renderer_asset" 'areRequiredFeaturesEnabled:o===`linux`||y'
+    assert_contains "$current_renderer_asset" 'isAnyFeatureLoading:o===`linux`?!1:g'
+    assert_contains "$native_apps_asset" 'a===`macOS`||a===`windows`||a===`linux`'
     assert_contains "$install_flow_asset" 'navigator.userAgent.includes(`Linux`)'
 
     # Branch 3: settings.json flag opts in even without env var.
-    rm "$main_bundle" "$renderer_asset" "$install_flow_asset"
+    rm "$main_bundle" "$renderer_asset" "$current_renderer_asset" "$install_flow_asset" "$native_apps_asset"
     printf '%s\n' "$bundle_body" > "$main_bundle"
     printf '%s\n' "$renderer_body" > "$renderer_asset"
+    printf '%s\n' "$current_renderer_body" > "$current_renderer_asset"
     printf '%s\n' "$install_flow_body" > "$install_flow_asset"
+    printf '%s\n' "$native_apps_body" > "$native_apps_asset"
     printf '%s\n' '{"codex-linux-computer-use-ui-enabled": true}' > "$fake_home/.config/codex-desktop/settings.json"
 
     env -u CODEX_LINUX_ENABLE_COMPUTER_USE_UI -u CODEX_LINUX_APP_ID -u CODEX_APP_ID -u CODEX_LINUX_SETTINGS_FILE \
         HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" \
         node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_contains "$main_bundle" 'return n===`linux`?{...e,computerUse:!0,computerUseNodeRepl:!0}'
+    assert_contains "$main_bundle" 'codexLinuxNativeDesktopApps'
     assert_contains "$renderer_asset" 'function hae(e){return e===`macOS`||e===`windows`||e===`linux`}'
+    assert_contains "$current_renderer_asset" 'areRequiredFeaturesEnabled:o===`linux`||y'
+    assert_contains "$native_apps_asset" 'a===`macOS`||a===`windows`||a===`linux`'
     assert_contains "$install_flow_asset" 'navigator.userAgent.includes(`Linux`)'
 }
 
