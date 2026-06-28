@@ -1204,6 +1204,21 @@ test_make_install_reports_missing_native_packages() {
     done
 }
 
+test_make_run_app_reports_missing_launcher() {
+    info "Checking make run-app missing-launcher diagnostics"
+    local workspace="$TMP_DIR/make-run-app-missing"
+    local output_log="$workspace/run-app.log"
+
+    mkdir -p "$workspace"
+
+    if make -f "$REPO_DIR/Makefile" -C "$workspace" run-app >"$output_log" 2>&1; then
+        fail "make run-app should fail when codex-app/start.sh is missing"
+    fi
+
+    assert_contains "$output_log" "Missing launcher: $workspace/codex-app/start.sh. Run make build-app first."
+    assert_not_contains "$output_log" "No such file or directory"
+}
+
 test_make_build_app_uses_installer_download_flow_by_default() {
     info "Checking make build-app default DMG behavior"
     local workspace="$TMP_DIR/make-build-app"
@@ -1239,7 +1254,6 @@ test_make_build_app_fresh_uses_installer_fresh_flow() {
     local first_line
     local second_line
     local third_line
-    local fourth_line
 
     mkdir -p "$workspace"
 
@@ -1259,11 +1273,9 @@ SCRIPT
     first_line="$(sed -n '1p' "$install_log")"
     second_line="$(sed -n '2p' "$install_log")"
     third_line="$(sed -n '3p' "$install_log")"
-    fourth_line="$(sed -n '4p' "$install_log")"
-    [ "$first_line" = "3" ] || fail "Expected make build-app-fresh to pass --fresh, --reuse-dmg, plus the default argument slot, got: $(cat "$install_log")"
+    [ "$first_line" = "2" ] || fail "Expected make build-app-fresh to pass --fresh plus the default argument slot, got: $(cat "$install_log")"
     [ "$second_line" = "--fresh" ] || fail "Expected make build-app-fresh to pass --fresh first, got: $(cat "$install_log")"
-    [ "$third_line" = "--reuse-dmg" ] || fail "Expected make build-app-fresh to pass --reuse-dmg after --fresh, got: $(cat "$install_log")"
-    [ -z "$fourth_line" ] || fail "Expected make build-app-fresh default DMG argument to be empty, got: $(cat "$install_log")"
+    [ -z "$third_line" ] || fail "Expected make build-app-fresh default DMG argument to be empty, got: $(cat "$install_log")"
 }
 
 test_installer_refreshes_stale_cached_dmg_metadata() {
@@ -1616,6 +1628,7 @@ test_fresh_install_removes_cached_dmg_metadata() {
     local source_dir="$workspace/source"
 
     mkdir -p "$source_dir"
+    printf '%s' "cached" >"$source_dir/Codex.dmg"
     printf '%s' "metadata" >"$source_dir/Codex.dmg.metadata"
 
     TEST_SOURCE_DIR="$source_dir" REPO_DIR="$REPO_DIR" bash <<'SCRIPT'
@@ -1634,6 +1647,94 @@ SCRIPT
 
     assert_file_not_exists "$source_dir/Codex.dmg"
     assert_file_not_exists "$source_dir/Codex.dmg.metadata"
+}
+
+test_fresh_reuse_dmg_uses_cache_when_metadata_matches() {
+    info "Checking --fresh --reuse-dmg reuses cached DMG when metadata matches"
+    local workspace="$TMP_DIR/fresh-reuse-dmg-metadata"
+    local bin_dir="$workspace/bin"
+    local source_dir="$workspace/source"
+    local output_log="$workspace/output.log"
+    local url="https://persistent.oaistatic.com/codex-app-prod/Codex.dmg"
+    local url_sha256
+
+    url_sha256="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
+
+    mkdir -p "$bin_dir" "$source_dir"
+    printf '%s' "cached" >"$source_dir/Codex.dmg"
+    cat >"$source_dir/Codex.dmg.metadata" <<EOF
+url_sha256=$url_sha256
+etag=same-etag
+last_modified=Thu, 04 Jun 2026 00:00:00 GMT
+content_length=6
+EOF
+
+    cat >"$bin_dir/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+set -eu
+
+is_head=0
+for arg in "$@"; do
+    if [ "$arg" = "-fsSLI" ]; then
+        is_head=1
+    fi
+done
+
+if [ "$is_head" -eq 1 ]; then
+    printf '%s\n' "HEAD" >> "$TEST_CURL_LOG"
+    printf 'HTTP/2 200\r\n'
+    printf 'ETag: same-etag\r\n'
+    printf 'Last-Modified: Thu, 04 Jun 2026 00:00:00 GMT\r\n'
+    printf 'Content-Length: 6\r\n'
+    printf '\r\n'
+    exit 0
+fi
+
+printf '%s\n' "GET" >> "$TEST_CURL_LOG"
+out=""
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-o" ]; then
+        shift
+        out="$1"
+    fi
+    shift || true
+done
+
+[ -n "$out" ] || exit 2
+printf '%s' "downloaded" >"$out"
+SCRIPT
+    chmod +x "$bin_dir/curl"
+    : >"$source_dir/curl.log"
+
+    PATH="$bin_dir:$PATH" \
+    TEST_CURL_LOG="$source_dir/curl.log" \
+    TEST_SOURCE_DIR="$source_dir" \
+    REPO_DIR="$REPO_DIR" \
+        bash <<'SCRIPT' >"$output_log" 2>&1
+set -Eeuo pipefail
+
+SCRIPT_DIR="$TEST_SOURCE_DIR"
+WORK_DIR="$(mktemp -d)"
+INSTALL_DIR="$TEST_SOURCE_DIR/codex-app"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/lib/install-helpers.sh"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/lib/dmg.sh"
+
+FRESH_INSTALL=1
+REUSE_CACHED_DMG=1
+prepare_install
+
+dmg_path="$(get_dmg)"
+[ "$dmg_path" = "$TEST_SOURCE_DIR/Codex.dmg" ]
+SCRIPT
+
+    assert_file_exists "$source_dir/Codex.dmg"
+    assert_file_exists "$source_dir/Codex.dmg.metadata"
+    [ "$(cat "$source_dir/Codex.dmg")" = "cached" ] || fail "Expected matching metadata to keep cached DMG"
+    assert_contains "$source_dir/curl.log" "HEAD"
+    assert_not_contains "$source_dir/curl.log" "GET"
+    assert_contains "$output_log" "Using cached DMG"
 }
 
 test_rebuild_candidate_uses_validated_default_dmg() {
@@ -5440,7 +5541,7 @@ test_linux_computer_use_ui_opt_in_smoke() {
     local main_bundle="$extracted/.vite/build/main-test.js"
     local renderer_asset="$extracted/webview/assets/use-model-settings-test.js"
     local current_renderer_asset="$extracted/webview/assets/use-is-plugins-enabled-current-test.js"
-    local install_flow_asset="$extracted/webview/assets/use-plugin-install-flow-test.js"
+    local install_flow_asset="$extracted/webview/assets/app-initial~app-main~worktree-init-v2-page~remote-conversation-page~pull-requests-page~plug~test.js"
     local native_apps_asset="$extracted/webview/assets/use-native-apps.electron-test.js"
     local bundle_body
     local renderer_body
@@ -5469,7 +5570,11 @@ function b(e){return e===`macOS`||e===`windows`}
 function x(e){let t=(0,_.c)(16),{enabled:n,hostId:r}=e,i=n===void 0?!0:n,{isLoading:a,platform:o}=m(),s=u(`1506311413`),c;t[0]===r?c=t[1]:(c={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=c);let l=v(c),d=o===`windows`&&!a,f=i&&d,p;t[2]===f?p=t[3]:(p={enabled:f},t[2]=f,t[3]=p);let h=S(p),g=l.isLoading||d&&h.isLoading,y=l.enabled&&(!d||h.enabled),x;t[4]!==y||t[5]!==i||t[6]!==g||t[7]!==s||t[8]!==a||t[9]!==o?(x=w({areRequiredFeaturesEnabled:y,enabled:i,isAnyFeatureLoading:g,isComputerUseGateEnabled:s,isHostCompatiblePlatform:b(o),isPlatformLoading:a,windowType:`electron`}),t[4]=y,t[5]=i,t[6]=g,t[7]=s,t[8]=a,t[9]=o,t[10]=x):x=t[10];return x}
 JS
 )"
-    install_flow_body='function Qe({forceReloadPlugins:e,hostId:t}){let ne=f({featureName:`computer_use`,hostId:t}),re=!ne.isLoading&&ne.enabled,[L,R]=(0,Z.useState)({});return re}'
+    install_flow_body="$(cat <<'JS'
+function Rj(e){return e===`macOS`||e===`windows`}
+function zj(e){let t=(0,Uj.c)(16),{enabled:n,hostId:r}=e,i=n===void 0?!0:n,{isLoading:a,platform:o}=Xt(),s=cn(`1506311413`),c;t[0]===r?c=t[1]:(c={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=c);let l=Fj(c),u=o===`windows`&&!a,d=i&&u,f;t[2]===d?f=t[3]:(f={enabled:d},t[2]=d,t[3]=f);let p=Bj(f),m=l.isLoading||u&&p.isLoading,h=l.enabled&&(!u||p.enabled),g;t[4]!==h||t[5]!==i||t[6]!==m||t[7]!==s||t[8]!==a||t[9]!==o?(g=Hj({areRequiredFeaturesEnabled:h,enabled:i,isAnyFeatureLoading:m,isComputerUseGateEnabled:s,isHostCompatiblePlatform:Rj(o),isPlatformLoading:a,windowType:`electron`}),t[4]=h,t[5]=i,t[6]=m,t[7]=s,t[8]=a,t[9]=o,t[10]=g):g=t[10];return g}
+JS
+)"
     native_apps_body="$(cat <<'JS'
 function d(e){return e.find(e=>e.plugin.name===`computer-use`)??null}
 function C(e){let t=(0,S.c)(9),{enabled:n}=e,{platform:a,isLoading:o}=c(),s=n&&(a===`macOS`||a===`windows`),l;t[0]===Symbol.for(`react.memo_cache_sentinel`)?(l={order:`usage`},t[0]=l):l=t[0];let u;t[1]===s?u=t[2]:(u={params:l,queryConfig:{enabled:s,staleTime:i.FIVE_MINUTES,refetchOnWindowFocus:!1}},t[1]=s,t[2]=u);let d=r(`native-desktop-apps`,u);return d}
@@ -5493,7 +5598,7 @@ JS
     assert_not_contains "$renderer_asset" 'function hae(e){return e===`macOS`||e===`windows`||e===`linux`}'
     assert_not_contains "$current_renderer_asset" 'areRequiredFeaturesEnabled:o===`linux`||y'
     assert_not_contains "$native_apps_asset" 'a===`macOS`||a===`windows`||a===`linux`'
-    assert_not_contains "$install_flow_asset" 'navigator.userAgent.includes(`Linux`)'
+    assert_not_contains "$install_flow_asset" 'areRequiredFeaturesEnabled:o===`linux`||h'
 
     # Branch 2: env var opts in — all Computer Use UI patches apply.
     rm "$main_bundle" "$renderer_asset" "$current_renderer_asset" "$install_flow_asset" "$native_apps_asset"
@@ -5514,7 +5619,8 @@ JS
     assert_contains "$current_renderer_asset" 'areRequiredFeaturesEnabled:o===`linux`||y'
     assert_contains "$current_renderer_asset" 'isAnyFeatureLoading:o===`linux`?!1:g'
     assert_contains "$native_apps_asset" 'a===`macOS`||a===`windows`||a===`linux`'
-    assert_contains "$install_flow_asset" 'navigator.userAgent.includes(`Linux`)'
+    assert_contains "$install_flow_asset" 'areRequiredFeaturesEnabled:o===`linux`||h'
+    assert_contains "$install_flow_asset" 'isAnyFeatureLoading:o===`linux`?!1:m'
 
     # Branch 3: settings.json flag opts in even without env var.
     rm "$main_bundle" "$renderer_asset" "$current_renderer_asset" "$install_flow_asset" "$native_apps_asset"
@@ -5533,7 +5639,7 @@ JS
     assert_contains "$renderer_asset" 'function hae(e){return e===`macOS`||e===`windows`||e===`linux`}'
     assert_contains "$current_renderer_asset" 'areRequiredFeaturesEnabled:o===`linux`||y'
     assert_contains "$native_apps_asset" 'a===`macOS`||a===`windows`||a===`linux`'
-    assert_contains "$install_flow_asset" 'navigator.userAgent.includes(`Linux`)'
+    assert_contains "$install_flow_asset" 'areRequiredFeaturesEnabled:o===`linux`||h'
 }
 
 test_linux_file_manager_patch_fails_soft() {
@@ -6379,11 +6485,13 @@ main() {
     test_appimage_builder_smoke
     test_missing_input_failure
     test_make_install_reports_missing_native_packages
+    test_make_run_app_reports_missing_launcher
     test_make_build_app_uses_installer_download_flow_by_default
     test_make_build_app_fresh_uses_installer_fresh_flow
     test_installer_refreshes_stale_cached_dmg_metadata
     test_extract_dmg_repairs_safe_7z_link_warnings
     test_fresh_install_removes_cached_dmg_metadata
+    test_fresh_reuse_dmg_uses_cache_when_metadata_matches
     test_rebuild_candidate_uses_validated_default_dmg
     test_native_shortcut_targets_compose_existing_flows
     test_fedora_dependency_bootstrap_installs_rpmbuild
