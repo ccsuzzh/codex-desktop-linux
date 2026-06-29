@@ -1449,6 +1449,7 @@ test("Linux remote mobile conversation hydration patch handles current app-serve
   assert.match(patched, /codexLinuxRemoteMobileHydrateUnknownTurn/);
   assert.match(patched, /codexLinuxRemoteMobileNotificationQueue/);
   assert.match(patched, /n\.params\?\.turn\?\.threadId\?\?n\.params\?\.thread\?\.id/);
+  assert.doesNotMatch(patched, /n\.params\?\.threadId/);
   assert.match(patched, /Skipping hydration for ambiguous turn\/started/);
   assert.match(patched, /codexLinuxRemoteMobilePendingNotifications\?\?=new Map/);
   assert.match(patched, /this\.readThread\(d,\{includeTurns:!1\}\)/);
@@ -1507,6 +1508,27 @@ test("Linux remote mobile hydration uses captured turn id normalizer helper", ()
 
   manager.onNotification("turn/started", {
     threadId: "turn-a",
+    turn: { id: "turn-a" },
+  });
+});
+
+test("Linux remote mobile hydration ignores top-level thread ids without nested thread identity", () => {
+  const source = syntheticAppServerManagerSignalsBundle();
+  const patched = applyLinuxRemoteMobileConversationHydrationPatch(source);
+  const context = {
+    module: { exports: {} },
+    I: (value) => value,
+    z: { error() {}, warning() {} },
+  };
+  vm.runInNewContext(`${patched};module.exports=T;`, context);
+  const manager = new context.module.exports();
+  manager.conversations = new Map();
+  manager.readThread = () => {
+    throw new Error("readThread should not be called without nested thread identity");
+  };
+
+  manager.onNotification("turn/started", {
+    threadId: "thread-a",
     turn: { id: "turn-a" },
   });
 });
