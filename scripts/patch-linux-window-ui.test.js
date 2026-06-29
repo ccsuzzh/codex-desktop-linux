@@ -4038,6 +4038,14 @@ test("keeps Linux desktop toggles visible with native Keyboard Shortcuts", () =>
     assert.match(linuxDesktopSource, /codex-linux-auto-update-on-exit/);
     assert.match(linuxDesktopSource, /import\{r as SettingsRow\}from"\.\/settings-row-A\.js"/);
     assert.match(linuxDesktopSource, /import\{z as __post\}from"\.\/shared-app-A\.js"/);
+    assert.match(linuxDesktopSource, /import\{t as Toggle\}from"\.\/toggle-A\.js"/);
+    assert.match(
+      linuxDesktopSource,
+      /control:\$\.jsx\(Toggle,\{checked:value,disabled:isLoading,onChange:update,ariaLabel:label\}\)/,
+    );
+    assert.doesNotMatch(linuxDesktopSource, /function LinuxSwitch/);
+    assert.doesNotMatch(linuxDesktopSource, /bg-token-text-primary/);
+    assert.doesNotMatch(linuxDesktopSource, /translate-x-4/);
 
     assert.match(
       fs.readFileSync(path.join(assetsDir, "settings-sections-A.js"), "utf8"),
@@ -4106,6 +4114,81 @@ test("writes only missing Linux settings fallback components after required chec
   }
 });
 
+test("uses a themed fallback toggle when upstream settings toggle is unavailable", () => {
+  const { extractedDir, assetsDir } = createModernNativeKeyboardShortcutsSettingsFixture();
+  try {
+    fs.rmSync(path.join(assetsDir, "toggle-A.js"));
+
+    const { value: result, warnings } = captureWarns(() => patchKeybindsSettingsAssets(extractedDir));
+
+    assert.equal(result.matched, true);
+    assert.deepEqual(warnings, []);
+    assert.equal(fs.existsSync(path.join(assetsDir, "linux-settings-toggle-linux.js")), true);
+
+    const linuxDesktopSource = fs.readFileSync(
+      path.join(assetsDir, linuxDesktopSettingsAsset),
+      "utf8",
+    );
+    assert.match(linuxDesktopSource, /import\{t as Toggle\}from"\.\/linux-settings-toggle-linux\.js"/);
+    assert.match(
+      linuxDesktopSource,
+      /control:\$\.jsx\(Toggle,\{checked:value,disabled:isLoading,onChange:update,ariaLabel:label\}\)/,
+    );
+    assert.doesNotMatch(linuxDesktopSource, /function LinuxSwitch/);
+    assert.doesNotMatch(linuxDesktopSource, /bg-token-text-primary/);
+    assert.doesNotMatch(linuxDesktopSource, /translate-x-4/);
+
+    const toggleSource = fs.readFileSync(
+      path.join(assetsDir, "linux-settings-toggle-linux.js"),
+      "utf8",
+    );
+    assert.match(toggleSource, /--color-token-radio-active-foreground/);
+    assert.match(toggleSource, /width:"32px"/);
+    assert.match(toggleSource, /height:"20px"/);
+    assert.match(toggleSource, /translateX\(12px\)/);
+
+    const secondResult = patchKeybindsSettingsAssets(extractedDir);
+    assert.equal(secondResult.matched, true);
+    assert.equal(secondResult.changed, 0);
+  } finally {
+    fs.rmSync(extractedDir, { recursive: true, force: true });
+  }
+});
+
+test("infers the current upstream settings toggle from settings row controls", () => {
+  const { extractedDir, assetsDir } = createModernNativeKeyboardShortcutsSettingsFixture();
+  try {
+    fs.rmSync(path.join(assetsDir, "toggle-A.js"));
+    fs.writeFileSync(path.join(assetsDir, "shared-toggle-A.js"), "function vn(){}export{vn};", "utf8");
+    fs.writeFileSync(
+      path.join(assetsDir, "general-settings-A.js"),
+      'import{vn as Fe}from"./shared-toggle-A.js";function GeneralSettings(){return (0,Y.jsx)(W,{label:"Default permissions",description:"",control:(0,Y.jsx)(Fe,{checked:!0,disabled:!0,onChange:e=>{save(e)},ariaLabel:"Default permissions"})})}export{GeneralSettings};',
+      "utf8",
+    );
+
+    const { value: result, warnings } = captureWarns(() => patchKeybindsSettingsAssets(extractedDir));
+
+    assert.equal(result.matched, true);
+    assert.deepEqual(warnings, []);
+    assert.equal(fs.existsSync(path.join(assetsDir, "linux-settings-toggle-linux.js")), false);
+
+    const linuxDesktopSource = fs.readFileSync(
+      path.join(assetsDir, linuxDesktopSettingsAsset),
+      "utf8",
+    );
+    assert.match(linuxDesktopSource, /import\{vn as Toggle\}from"\.\/shared-toggle-A\.js"/);
+    assert.match(
+      linuxDesktopSource,
+      /control:\$\.jsx\(Toggle,\{checked:value,disabled:isLoading,onChange:update,ariaLabel:label\}\)/,
+    );
+    assert.doesNotMatch(linuxDesktopSource, /function LinuxSwitch/);
+    assert.doesNotMatch(linuxDesktopSource, /bg-token-text-primary/);
+    assert.doesNotMatch(linuxDesktopSource, /translate-x-4/);
+  } finally {
+    fs.rmSync(extractedDir, { recursive: true, force: true });
+  }
+});
+
 test("does not leave generated Linux settings fallbacks when later current-DMG route checks fail", () => {
   const { extractedDir, assetsDir } = createModernNativeKeyboardShortcutsSettingsFixture();
   try {
@@ -4151,6 +4234,8 @@ test("adds Linux desktop settings when native shortcuts use a consolidated setti
     assert.match(linuxDesktopSource, /href:url/);
     assert.doesNotMatch(linuxDesktopSource, /Source commit URL/);
     assert.match(linuxDesktopSource, /import\{R as __reactFactory,I as __jsxFactory\}from"\.\/shared-runtime-A\.js"/);
+    assert.match(linuxDesktopSource, /import\{t as Toggle\}from"\.\/toggle-A\.js"/);
+    assert.doesNotMatch(linuxDesktopSource, /function LinuxSwitch/);
 
     const settingsPageSource = fs.readFileSync(path.join(assetsDir, "settings-page-A.js"), "utf8");
     assert.match(settingsPageSource, /linux-desktop-settings-linux\.js/);
@@ -4192,6 +4277,13 @@ test("adds Linux desktop settings when the lazy route map is hoisted into a sepa
     assert.ok(result.changed >= 3);
     assert.deepEqual(warnings, []);
     assert.equal(fs.existsSync(path.join(assetsDir, linuxDesktopSettingsAsset)), true);
+
+    const linuxDesktopSource = fs.readFileSync(
+      path.join(assetsDir, linuxDesktopSettingsAsset),
+      "utf8",
+    );
+    assert.match(linuxDesktopSource, /import\{t as Toggle\}from"\.\/toggle-A\.js"/);
+    assert.doesNotMatch(linuxDesktopSource, /function LinuxSwitch/);
 
     // The icon/navigation bundle must reuse the general-settings icon for the new
     // entry and must NOT receive the lazy page component as a nav icon (the bug
