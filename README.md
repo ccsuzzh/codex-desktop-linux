@@ -113,6 +113,10 @@ workarounds.
 | Experimental Remote Mobile Control | Opt-in | `remote-mobile-control` | [Docs](linux-features/remote-mobile-control/README.md) |
 | Thorium Chrome Plugin Support | Opt-in | `thorium-chrome-plugin` | [Docs](linux-features/thorium-chrome-plugin/README.md) |
 
+Additional opt-in features, including proxy, titlebar, process cleanup,
+status-panel, and X11 Computer Use adapters, are documented under
+`linux-features/`.
+
 Server-gated upstream features, such as model rollouts, are controlled by
 OpenAI per account. Rebuilding this wrapper does not unlock them.
 
@@ -236,6 +240,7 @@ Full list: [Troubleshooting](docs/troubleshooting.md).
 - [Architecture](docs/architecture.md)
 - [GitHub CLI auth in app-launched shells](docs/github-cli-auth.md)
 - [Linux Features architecture](docs/linux-features-architecture.md)
+- [Wayland input focus investigation](docs/wayland-input-focus-investigation.md)
 - [Webview server evaluation](docs/webview-server-evaluation.md)
 
 ## Disclaimer
