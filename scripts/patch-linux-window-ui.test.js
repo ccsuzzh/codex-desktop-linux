@@ -2637,6 +2637,27 @@ test("omits undefined BrowserWindow options in the current window manager bundle
   assert.doesNotMatch(patched, /minWidth:T\?\.width/);
 });
 
+test("forces Linux primary BrowserWindow to be focusable", () => {
+  const iconAsset = "app-test.png";
+  const source = [
+    "async createWindow(e={}){let{title:n,width:i=1280,height:o=820,appearance:c=`primary`,",
+    "show:l=!0,parent:p,focusable:m}=e,D={},M=new a.BrowserWindow({width:b,height:x,",
+    "...S===void 0||C===void 0?{}:{x:S,y:C},title:n??a.app.getName(),backgroundColor:A,",
+    "show:l,parent:p,focusable:m,",
+    "...process.platform===`win32`?{autoHideMenuBar:!0}:process.platform===`linux`?{icon:process.resourcesPath+`/../content/webview/assets/app-test.png`}:{},",
+    "backgroundMaterial:j??void 0,...D,minWidth:T?.width,minHeight:T?.height,webPreferences:k});}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxWindowOptionsPatch, source, iconAsset);
+
+  assert.match(
+    patched,
+    /show:l,\.\.\.p==null\?\{\}:\{parent:p\},\.\.\.process\.platform===`linux`&&c===`primary`\?\{focusable:!0\}:m==null\?\{\}:\{focusable:m\}/,
+  );
+  assert.match(patched, /\.\.\.j==null\?\{\}:\{backgroundMaterial:j\},\.\.\.D/);
+  assert.doesNotMatch(patched, /show:l,parent:p,focusable:m/);
+});
+
 test("patches remaining Linux window icon snippets when another window is already patched", () => {
   const iconAsset = "app-test.png";
   const iconPathExpression = "process.resourcesPath+`/../content/webview/assets/app-test.png`";

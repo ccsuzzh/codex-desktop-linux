@@ -71,6 +71,7 @@ function applyLinuxWindowOptionsPatch(currentSource, iconAsset) {
   }
 
   patchedSource = applyDefinedBrowserWindowOptionsPatch(patchedSource);
+  patchedSource = applyLinuxPrimaryFocusablePatch(patchedSource);
   return patchedSource;
 }
 
@@ -93,6 +94,71 @@ function applyDefinedBrowserWindowOptionsPatch(currentSource) {
     ) =>
       `show:${showAlias},...${parentAlias}==null?{}:{parent:${parentAlias}},...${focusableAlias}==null?{}:{focusable:${focusableAlias}},${platformOptions}...${backgroundMaterialAlias}==null?{}:{backgroundMaterial:${backgroundMaterialAlias}},...${appearanceOptionsAlias},...${minimumSizeAlias}==null?{}:{minWidth:${minimumSizeAlias}.width,minHeight:${minimumSizeAlias}.height},webPreferences:${webPreferencesAlias}`,
   );
+}
+
+function findCreateWindowAppearanceAlias(currentSource, matchIndex) {
+  const prefix = currentSource.slice(Math.max(0, matchIndex - 3000), matchIndex);
+  const createWindowRegex =
+    /createWindow\([^)]*\)\{let\{[^}]*appearance:([A-Za-z_$][\w$]*)(?:=[^,}]+)?/g;
+  let match;
+  let appearanceAlias = null;
+  while ((match = createWindowRegex.exec(prefix)) != null) {
+    appearanceAlias = match[1];
+  }
+  return appearanceAlias;
+}
+
+function applyLinuxPrimaryFocusablePatch(currentSource) {
+  if (
+    currentSource.includes("===`primary`?{focusable:!0}") ||
+    currentSource.includes("===`primary`?!0:")
+  ) {
+    return currentSource;
+  }
+
+  let patchedAny = false;
+  let skippedAny = false;
+  const focusableSpreadRegex =
+    /\.\.\.([A-Za-z_$][\w$]*)==null\?\{\}:\{focusable:\1\},(\.\.\.process\.platform===`win32`\?)/g;
+  let patchedSource = currentSource.replace(
+    focusableSpreadRegex,
+    (match, focusableAlias, platformOptions, offset) => {
+      const appearanceAlias = findCreateWindowAppearanceAlias(currentSource, offset);
+      if (appearanceAlias == null) {
+        skippedAny = true;
+        return match;
+      }
+      patchedAny = true;
+      return (
+        `...process.platform===\`linux\`&&${appearanceAlias}===\`primary\`?{focusable:!0}:` +
+        `${focusableAlias}==null?{}:{focusable:${focusableAlias}},${platformOptions}`
+      );
+    },
+  );
+
+  const focusableDirectRegex =
+    /focusable:([A-Za-z_$][\w$]*),(\.\.\.process\.platform===`win32`\?)/g;
+  patchedSource = patchedSource.replace(
+    focusableDirectRegex,
+    (match, focusableAlias, platformOptions, offset) => {
+      const appearanceAlias = findCreateWindowAppearanceAlias(currentSource, offset);
+      if (appearanceAlias == null) {
+        skippedAny = true;
+        return match;
+      }
+      patchedAny = true;
+      return (
+        `focusable:process.platform===\`linux\`&&${appearanceAlias}===\`primary\`?!0:` +
+        `${focusableAlias},${platformOptions}`
+      );
+    },
+  );
+
+  if (!patchedAny && skippedAny && currentSource.includes("createWindow(")) {
+    console.warn("WARN: Could not derive primary BrowserWindow appearance alias — skipping Linux focusable patch");
+  }
+
+  return patchedSource;
 }
 
 function applyLinuxNativeTitlebarPatch(currentSource) {
