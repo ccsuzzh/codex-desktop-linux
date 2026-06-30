@@ -34,6 +34,7 @@ const {
   applyLinuxChromeExtensionStatusPatch,
   applyLinuxChromeNativeHostRuntimePatch,
   applyLinuxChromePluginAutoInstallPatch,
+  applyLinuxTerminalUserPathPatch,
   applyLinuxAppUpdaterBridgePatch,
   applyLinuxAppUpdaterMenuPatch,
   applyLinuxAboutDialogPatch,
@@ -139,6 +140,8 @@ const workerBundlePrefix =
   "let i=require(`node:path`),o=require(`node:fs`);";
 const fileManagerBundle =
   "var lu=jl({id:`fileManager`,label:`Finder`,icon:`apps/finder.png`,kind:`fileManager`,darwin:{detect:()=>`open`,args:e=>il(e)},win32:{label:`File Explorer`,icon:`apps/file-explorer.png`,detect:uu,args:e=>il(e),open:async({path:e})=>du(e)}});function uu(){}";
+const terminalEnvBundle =
+  "var Q0=`xterm-256color`;var t={ $r(e){return e} };var Backend=class{isLocalTerminalSession(e){return e?.type===`local`}async getWorktreeShellEnvironmentForCwd(e){return null}async buildTerminalEnv(e,n,r){let i={...process.env};if(n!=null&&(i.CODEX_APP_TITLE=n),this.isLocalTerminalSession(r)){let t=await this.getWorktreeShellEnvironmentForCwd(e);if(t!=null){for(let e of t.exclude)delete i[e];Object.assign(i,t.set)}}return process.platform!==`win32`&&(i.TERM=Q0,delete i.TERMINFO,delete i.TERMINFO_DIRS),t.$r(i)}};";
 const alreadyOpaqueBackgroundBundle =
   "process.platform===`linux`?{backgroundColor:e?t:n,backgroundMaterial:null}:{backgroundColor:r,backgroundMaterial:null}";
 const opaqueBackgroundBundleWithDriftingGw =
@@ -720,6 +723,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-chat-search-hydration",
     "linux-file-manager",
     "linux-worker-file-manager",
+    "linux-terminal-user-path",
     "linux-tray",
     "linux-build-info-tray",
     "linux-single-instance",
@@ -792,13 +796,16 @@ test("default core patch descriptors are grouped and unique", () => {
     descriptors.find((descriptor) => descriptor.id === "linux-computer-use-native-desktop-apps")?.ciPolicy,
     "opt-in",
   );
+  assert.equal(
+    descriptors.find((descriptor) => descriptor.id === "linux-terminal-user-path")?.ciPolicy,
+    "optional",
+  );
   for (const id of [
     "linux-window-options",
     "linux-native-titlebar",
     "linux-opaque-background",
     "linux-avatar-overlay-mouse-passthrough",
     "linux-tray",
-    "linux-workspace-root-open-targets",
   ]) {
     assert.equal(
       descriptors.find((descriptor) => descriptor.id === id)?.ciPolicy,
@@ -806,6 +813,11 @@ test("default core patch descriptors are grouped and unique", () => {
       `${id} should block upstream builds when it drifts`,
     );
   }
+  assert.equal(
+    descriptors.find((descriptor) => descriptor.id === "linux-workspace-root-open-targets")?.ciPolicy,
+    "optional",
+    "workspace-root open targets should not block app builds when upstream removes the File Manager insertion point",
+  );
 
   const descriptorOrder = new Map(descriptors.map((descriptor) => [descriptor.id, descriptor.order]));
   assert.ok(
@@ -1457,6 +1469,54 @@ test("adds Linux file manager support to the worker open target registry", () =>
   assert.match(patched, /i\.dirname\(t\)/);
   assert.doesNotMatch(patched, /open:async\(\{path:e\}\)=>\{let [^}]*require\(`node:fs`\)/);
   assert.match(patched, /import\(`electron`\)\)\.shell\.openPath\(t\)/);
+});
+
+test("restores the user PATH for Linux local terminal sessions", () => {
+  const source = `${mainBundlePrefix}${terminalEnvBundle}`;
+
+  const patched = applyPatchTwice(applyLinuxTerminalUserPathPatch, source);
+
+  assert.match(patched, /function codexLinuxRestoreUserTerminalPath/);
+  assert.match(patched, /CODEX_LINUX_USER_PATH/);
+  assert.match(
+    patched,
+    /process\.platform===`linux`&&this\.isLocalTerminalSession\(r\)&&codexLinuxRestoreUserTerminalPath\(i\)/,
+  );
+  assert.doesNotMatch(patched, /CODEX_LINUX_USER_PATH;n\(i\)/);
+
+  const helperSource = patched.match(
+    /function codexLinuxRestoreUserTerminalPath\(e\)\{[\s\S]*?return e\}/,
+  )?.[0];
+  assert.ok(helperSource);
+
+  const managedRuntime = "/opt/codex-desktop/resources/node-runtime";
+  const managedBin = `${managedRuntime}/bin`;
+  const runHelper = (terminalPath, processPath = `${managedBin}:/usr/bin:/bin`) => {
+    const terminalEnv = {
+      PATH: terminalPath,
+      CODEX_LINUX_USER_PATH: "/usr/bin:/bin",
+    };
+    vm.runInNewContext(`${helperSource};codexLinuxRestoreUserTerminalPath(terminalEnv);`, {
+      process: {
+        env: {
+          CODEX_LINUX_USER_PATH: "/usr/bin:/bin",
+          CODEX_MANAGED_NODE_RUNTIME_DIR: managedRuntime,
+          PATH: processPath,
+        },
+      },
+      terminalEnv,
+    });
+    return terminalEnv;
+  };
+
+  assert.deepEqual(runHelper(`${managedBin}:/usr/bin:/bin`), { PATH: "/usr/bin:/bin" });
+  assert.deepEqual(
+    runHelper(`/worktree/bin:${managedBin}:/custom/bin`, `${managedBin}:/usr/bin:/bin`),
+    { PATH: "/worktree/bin:/usr/bin:/bin:/custom/bin" },
+  );
+  assert.deepEqual(runHelper("/worktree/bin:/custom/bin"), {
+    PATH: "/worktree/bin:/custom/bin",
+  });
 });
 
 test("patchExtractedApp patches worker file manager support", () => {
@@ -4031,6 +4091,16 @@ test("keeps Linux desktop toggles visible with native Keyboard Shortcuts", () =>
     assert.match(linuxDesktopSource, /Linux source commit/);
     assert.match(linuxDesktopSource, /Copy commit/);
     assert.match(linuxDesktopSource, /Open on GitHub/);
+    assert.match(linuxDesktopSource, /"Linux source commit":\[\{key:"copyCommit"/);
+    assert.match(linuxDesktopSource, /"Generated":\[\{key:"refresh"/);
+    assert.match(linuxDesktopSource, /"Metadata file":\[\{key:"details"/);
+    assert.match(linuxDesktopSource, /control:null/);
+    assert.match(linuxDesktopSource, /cursor-pointer/);
+    assert.match(linuxDesktopSource, /disabled:cursor-not-allowed/);
+    assert.doesNotMatch(
+      linuxDesktopSource,
+      /control:\$\.jsxs\("div",\{className:"flex flex-wrap items-center justify-end gap-2"/,
+    );
     assert.doesNotMatch(linuxDesktopSource, /Source commit URL/);
     assert.match(linuxDesktopSource, /href:url/);
     assert.match(linuxDesktopSource, /codex-linux-get-build-info/);
@@ -4038,6 +4108,14 @@ test("keeps Linux desktop toggles visible with native Keyboard Shortcuts", () =>
     assert.match(linuxDesktopSource, /codex-linux-auto-update-on-exit/);
     assert.match(linuxDesktopSource, /import\{r as SettingsRow\}from"\.\/settings-row-A\.js"/);
     assert.match(linuxDesktopSource, /import\{z as __post\}from"\.\/shared-app-A\.js"/);
+    assert.match(linuxDesktopSource, /import\{t as Toggle\}from"\.\/toggle-A\.js"/);
+    assert.match(
+      linuxDesktopSource,
+      /control:\$\.jsx\(Toggle,\{checked:value,disabled:isLoading,onChange:update,ariaLabel:label\}\)/,
+    );
+    assert.doesNotMatch(linuxDesktopSource, /function LinuxSwitch/);
+    assert.doesNotMatch(linuxDesktopSource, /bg-token-text-primary/);
+    assert.doesNotMatch(linuxDesktopSource, /translate-x-4/);
 
     assert.match(
       fs.readFileSync(path.join(assetsDir, "settings-sections-A.js"), "utf8"),
@@ -4088,19 +4166,102 @@ test("writes only missing Linux settings fallback components after required chec
   const { extractedDir, assetsDir } = createModernNativeKeyboardShortcutsSettingsFixture();
   try {
     fs.rmSync(path.join(assetsDir, "settings-row-A.js"));
+    fs.rmSync(path.join(assetsDir, "settings-content-layout-A.js"));
 
     const { value: result, warnings } = captureWarns(() => patchKeybindsSettingsAssets(extractedDir));
 
     assert.equal(result.matched, true);
     assert.deepEqual(warnings, []);
     assert.equal(fs.existsSync(path.join(assetsDir, "linux-settings-row-linux.js")), true);
-    assert.equal(fs.existsSync(path.join(assetsDir, "linux-settings-page-linux.js")), false);
+    assert.equal(fs.existsSync(path.join(assetsDir, "linux-settings-page-linux.js")), true);
     assert.equal(fs.existsSync(path.join(assetsDir, "linux-settings-section-linux.js")), false);
     assert.equal(fs.existsSync(path.join(assetsDir, "linux-settings-group-linux.js")), false);
     assert.match(
       fs.readFileSync(path.join(assetsDir, linuxDesktopSettingsAsset), "utf8"),
       /import\{n as SettingsRow\}from"\.\/linux-settings-row-linux\.js"/,
     );
+
+    const settingsPageSource = fs.readFileSync(
+      path.join(assetsDir, "linux-settings-page-linux.js"),
+      "utf8",
+    );
+    assert.match(settingsPageSource, /h-full min-h-0 w-full overflow-y-auto/);
+    assert.match(settingsPageSource, /mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-6/);
+  } finally {
+    fs.rmSync(extractedDir, { recursive: true, force: true });
+  }
+});
+
+test("uses a themed fallback toggle when upstream settings toggle is unavailable", () => {
+  const { extractedDir, assetsDir } = createModernNativeKeyboardShortcutsSettingsFixture();
+  try {
+    fs.rmSync(path.join(assetsDir, "toggle-A.js"));
+
+    const { value: result, warnings } = captureWarns(() => patchKeybindsSettingsAssets(extractedDir));
+
+    assert.equal(result.matched, true);
+    assert.deepEqual(warnings, []);
+    assert.equal(fs.existsSync(path.join(assetsDir, "linux-settings-toggle-linux.js")), true);
+
+    const linuxDesktopSource = fs.readFileSync(
+      path.join(assetsDir, linuxDesktopSettingsAsset),
+      "utf8",
+    );
+    assert.match(linuxDesktopSource, /import\{t as Toggle\}from"\.\/linux-settings-toggle-linux\.js"/);
+    assert.match(
+      linuxDesktopSource,
+      /control:\$\.jsx\(Toggle,\{checked:value,disabled:isLoading,onChange:update,ariaLabel:label\}\)/,
+    );
+    assert.doesNotMatch(linuxDesktopSource, /function LinuxSwitch/);
+    assert.doesNotMatch(linuxDesktopSource, /bg-token-text-primary/);
+    assert.doesNotMatch(linuxDesktopSource, /translate-x-4/);
+
+    const toggleSource = fs.readFileSync(
+      path.join(assetsDir, "linux-settings-toggle-linux.js"),
+      "utf8",
+    );
+    assert.match(toggleSource, /--color-token-radio-active-foreground/);
+    assert.match(toggleSource, /width:"32px"/);
+    assert.match(toggleSource, /height:"20px"/);
+    assert.match(toggleSource, /translateX\(12px\)/);
+
+    const secondResult = patchKeybindsSettingsAssets(extractedDir);
+    assert.equal(secondResult.matched, true);
+    assert.equal(secondResult.changed, 0);
+  } finally {
+    fs.rmSync(extractedDir, { recursive: true, force: true });
+  }
+});
+
+test("infers the current upstream settings toggle from settings row controls", () => {
+  const { extractedDir, assetsDir } = createModernNativeKeyboardShortcutsSettingsFixture();
+  try {
+    fs.rmSync(path.join(assetsDir, "toggle-A.js"));
+    fs.writeFileSync(path.join(assetsDir, "shared-toggle-A.js"), "function vn(){}export{vn};", "utf8");
+    fs.writeFileSync(
+      path.join(assetsDir, "general-settings-A.js"),
+      'import{vn as Fe}from"./shared-toggle-A.js";function GeneralSettings(){return (0,Y.jsx)(W,{label:"Default permissions",description:"",control:(0,Y.jsx)(Fe,{checked:!0,disabled:!0,onChange:e=>{save(e)},ariaLabel:"Default permissions"})})}export{GeneralSettings};',
+      "utf8",
+    );
+
+    const { value: result, warnings } = captureWarns(() => patchKeybindsSettingsAssets(extractedDir));
+
+    assert.equal(result.matched, true);
+    assert.deepEqual(warnings, []);
+    assert.equal(fs.existsSync(path.join(assetsDir, "linux-settings-toggle-linux.js")), false);
+
+    const linuxDesktopSource = fs.readFileSync(
+      path.join(assetsDir, linuxDesktopSettingsAsset),
+      "utf8",
+    );
+    assert.match(linuxDesktopSource, /import\{vn as Toggle\}from"\.\/shared-toggle-A\.js"/);
+    assert.match(
+      linuxDesktopSource,
+      /control:\$\.jsx\(Toggle,\{checked:value,disabled:isLoading,onChange:update,ariaLabel:label\}\)/,
+    );
+    assert.doesNotMatch(linuxDesktopSource, /function LinuxSwitch/);
+    assert.doesNotMatch(linuxDesktopSource, /bg-token-text-primary/);
+    assert.doesNotMatch(linuxDesktopSource, /translate-x-4/);
   } finally {
     fs.rmSync(extractedDir, { recursive: true, force: true });
   }
@@ -4151,6 +4312,8 @@ test("adds Linux desktop settings when native shortcuts use a consolidated setti
     assert.match(linuxDesktopSource, /href:url/);
     assert.doesNotMatch(linuxDesktopSource, /Source commit URL/);
     assert.match(linuxDesktopSource, /import\{R as __reactFactory,I as __jsxFactory\}from"\.\/shared-runtime-A\.js"/);
+    assert.match(linuxDesktopSource, /import\{t as Toggle\}from"\.\/toggle-A\.js"/);
+    assert.doesNotMatch(linuxDesktopSource, /function LinuxSwitch/);
 
     const settingsPageSource = fs.readFileSync(path.join(assetsDir, "settings-page-A.js"), "utf8");
     assert.match(settingsPageSource, /linux-desktop-settings-linux\.js/);
@@ -4192,6 +4355,13 @@ test("adds Linux desktop settings when the lazy route map is hoisted into a sepa
     assert.ok(result.changed >= 3);
     assert.deepEqual(warnings, []);
     assert.equal(fs.existsSync(path.join(assetsDir, linuxDesktopSettingsAsset)), true);
+
+    const linuxDesktopSource = fs.readFileSync(
+      path.join(assetsDir, linuxDesktopSettingsAsset),
+      "utf8",
+    );
+    assert.match(linuxDesktopSource, /import\{t as Toggle\}from"\.\/toggle-A\.js"/);
+    assert.doesNotMatch(linuxDesktopSource, /function LinuxSwitch/);
 
     // The icon/navigation bundle must reuse the general-settings icon for the new
     // entry and must NOT receive the lazy page component as a nav icon (the bug
@@ -7560,6 +7730,46 @@ test("criticalFailuresFromReport agrees with validateReport and skips non-applic
   assert.ok(failures.some((failure) => failure.startsWith("req-bad:")));
   assert.ok(!failures.some((failure) => failure.startsWith("req-not-applicable:")));
   assert.ok(!failures.some((failure) => failure.startsWith("opt-bad:")));
+});
+
+test("terminal user PATH patch drift is reported as optional", () => {
+  const coreRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-terminal-path-optional-core-"));
+  const tempApp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-terminal-path-optional-app-"));
+  try {
+    writeCorePatchFixture(coreRoot, "sample/terminal-path", [
+      "\"use strict\";",
+      "const { applyLinuxTerminalUserPathPatch } = require(",
+      `  ${JSON.stringify(path.join(__dirname, "patches", "main-process", "misc.js"))},`,
+      ");",
+      "module.exports = {",
+      "  id: \"linux-terminal-user-path\",",
+      "  phase: \"main-bundle\",",
+      "  ciPolicy: \"optional\",",
+      "  apply: applyLinuxTerminalUserPathPatch,",
+      "};",
+    ].join("\n"));
+
+    const buildDir = path.join(tempApp, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.writeFileSync(path.join(buildDir, "main.js"), "async buildTerminalEnv(){return null}// node-pty");
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempApp, { report, corePatchRoot: coreRoot }));
+
+    const entry = report.patches.find((patch) => patch.name === "linux-terminal-user-path");
+    assert.equal(entry?.ciPolicy, "optional");
+    assert.equal(entry?.status, "skipped-optional");
+    assert.ok(
+      optionalDriftFromReport(report).some((drift) => drift.name === "linux-terminal-user-path"),
+      "terminal PATH drift should stay visible as optional drift",
+    );
+    assert.ok(
+      !criticalFailuresFromReport(report).some((failure) => failure.name === "linux-terminal-user-path"),
+    );
+  } finally {
+    fs.rmSync(coreRoot, { recursive: true, force: true });
+    fs.rmSync(tempApp, { recursive: true, force: true });
+  }
 });
 
 test("patchMainBundleSource survives a throwing optional patch without a report", () => {
