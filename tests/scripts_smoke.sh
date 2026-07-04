@@ -3432,6 +3432,8 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/launcher/start.sh.template" "ADOPTED_WEBVIEW_PID"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "Reusing webview server pid="
     assert_contains "$REPO_DIR/launcher/start.sh.template" "run_cold_start_hooks"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" '2>/dev/null 1>&"\$LAUNCHER_EARLY_STDERR_FD" || true'
+    assert_not_contains "$REPO_DIR/launcher/start.sh.template" '>&"\$LAUNCHER_EARLY_STDERR_FD" 2>/dev/null || true'
     assert_contains "$REPO_DIR/linux-features/remote-mobile-control/feature.json" '"stageHook": "./stage.sh"'
     assert_contains "$REPO_DIR/linux-features/remote-mobile-control/stage.sh" "cold-start.d"
     assert_contains "$REPO_DIR/linux-features/remote-mobile-control/stage.sh" "remote-mobile-control"
@@ -3996,8 +3998,10 @@ EOF
     assert_contains "$REPO_DIR/scripts/lib/package-common.sh" "node-runtime"
     assert_contains "$REPO_DIR/tests/fixtures/create-packaged-app-fixture.sh" "resources/node-runtime/bin"
     assert_contains "$REPO_DIR/.github/workflows/ci.yml" "tests/fixtures/create-packaged-app-fixture.sh codex-app"
-    assert_contains "$REPO_DIR/.github/workflows/ci.yml" "for file in scripts/patches/"
-    assert_contains "$REPO_DIR/scripts/ci/container-entrypoint.sh" "for file in scripts/patches/"
+    assert_contains "$REPO_DIR/.github/workflows/ci.yml" "bash scripts/ci/run-node-checks.sh"
+    assert_contains "$REPO_DIR/scripts/ci/container-entrypoint.sh" "bash scripts/ci/run-node-checks.sh"
+    assert_contains "$REPO_DIR/scripts/ci/run-node-checks.sh" "git ls-files '\\*.js'"
+    assert_contains "$REPO_DIR/scripts/ci/run-node-checks.sh" "git ls-files '\\*.test.js' 'linux-features/\\*/test.js'"
     assert_contains "$REPO_DIR/flake.nix" "rewriteCratesIoDownloadUrl"
     assert_contains "$REPO_DIR/flake.nix" "https://static.crates.io/crates/"
     assert_contains "$REPO_DIR/flake.nix" "api/v1/crates/"
@@ -4070,6 +4074,113 @@ if (!launcher.includes('ln -sfnT "$target" "$link_path"')) {
   throw new Error("replace_symlink must replace plugin links as paths, not as directory children");
 }
 NODE
+}
+
+test_webview_server_cache_policy() {
+    info "Checking webview server cache policy"
+    python3 - "$REPO_DIR/launcher/webview-server.py" <<'PY'
+import http.client
+import os
+import pathlib
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+
+server_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(tempfile.mkdtemp(prefix="codex-webview-cache-policy-"))
+proc = None
+
+try:
+    (workspace / "assets").mkdir()
+    (workspace / "apps").mkdir()
+    (workspace / "index.html").write_text("<!doctype html><title>Codex</title>", encoding="utf8")
+    (workspace / "assets" / "app-test-abc123.js").write_text("export default 1;\n", encoding="utf8")
+    (workspace / "apps" / "icon.png").write_bytes(b"png")
+    fixed_mtime = 1_700_000_000
+    for path in workspace.rglob("*"):
+        if path.is_file():
+            os.utime(path, (fixed_mtime, fixed_mtime))
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+
+    proc = subprocess.Popen(
+        [sys.executable, str(server_path), str(port), "--bind", "127.0.0.1"],
+        cwd=workspace,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+
+    deadline = time.time() + 5
+    while True:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                break
+        except OSError:
+            if proc.poll() is not None:
+                raise AssertionError(f"webview server exited early with {proc.returncode}")
+            if time.time() > deadline:
+                raise AssertionError("webview server did not start")
+            time.sleep(0.05)
+
+    def request(method, path, headers=None):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(method, path, headers=headers or {})
+        response = conn.getresponse()
+        body = response.read()
+        result = (response.status, {k.lower(): v for k, v in response.getheaders()}, body)
+        conn.close()
+        return result
+
+    index_status, index_headers, _ = request("HEAD", "/index.html")
+    assert index_status == 200, index_status
+    assert index_headers.get("cache-control") == "no-store, max-age=0", index_headers
+    assert index_headers.get("pragma") == "no-cache", index_headers
+    assert index_headers.get("expires") == "0", index_headers
+
+    asset_status, asset_headers, _ = request("HEAD", "/assets/app-test-abc123.js")
+    assert asset_status == 200, asset_status
+    assert asset_headers.get("cache-control") == "public, max-age=31536000, immutable", asset_headers
+    assert "pragma" not in asset_headers, asset_headers
+    assert "expires" not in asset_headers, asset_headers
+
+    cached_status, cached_headers, _ = request(
+        "GET",
+        "/assets/app-test-abc123.js",
+        {"If-Modified-Since": asset_headers["last-modified"]},
+    )
+    assert cached_status == 304, (cached_status, cached_headers)
+    assert cached_headers.get("cache-control") == "public, max-age=31536000, immutable", cached_headers
+
+    refreshed_index_status, _, _ = request(
+        "GET",
+        "/index.html",
+        {"If-Modified-Since": index_headers["last-modified"]},
+    )
+    assert refreshed_index_status == 200, refreshed_index_status
+
+    icon_status, icon_headers, _ = request("HEAD", "/apps/icon.png")
+    assert icon_status == 200, icon_status
+    assert icon_headers.get("cache-control") == "no-store, max-age=0", icon_headers
+
+    escaped_index_status, escaped_index_headers, _ = request("HEAD", "/assets/../index.html")
+    assert escaped_index_status == 200, escaped_index_status
+    assert escaped_index_headers.get("cache-control") == "no-store, max-age=0", escaped_index_headers
+finally:
+    if proc is not None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+    shutil.rmtree(workspace, ignore_errors=True)
+PY
 }
 
 test_process_detection_helper_cmdline_shapes() {
@@ -6782,6 +6893,7 @@ main() {
     test_chrome_marketplace_fallback_synthesis
     test_chrome_native_host_manifest_writer
     test_launcher_template_sanity
+    test_webview_server_cache_policy
     test_process_detection_helper_cmdline_shapes
     test_webview_probe_equivalence
     test_side_by_side_launcher_identity
