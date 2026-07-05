@@ -20,88 +20,114 @@ process.env.CODEX_LINUX_FEATURES_CONFIG = path.join(
 );
 
 const {
+  applyAutomationScheduleMultiTimePatch,
+  patchAutomationScheduleAssets,
+} = require("./patches/impl/automation-schedule.js");
+const {
   COMPUTER_USE_UI_ENV_VAR,
   COMPUTER_USE_UI_SETTINGS_KEY,
-  applyAutomationScheduleMultiTimePatch,
   applyLinuxComputerUseFeaturePatch,
   applyLinuxComputerUseInstallFlowPatch,
   applyLinuxNativeDesktopAppsHandlerPatch,
   applyLinuxComputerUsePluginGatePatch,
   applyLinuxComputerUseRendererAvailabilityPatch,
-  applyLinuxDesktopSettingsIndexPatch,
-  applyLinuxAvatarOverlayMousePassthroughPatch,
-  applyBrowserUseNodeReplApprovalPatch,
-  applyLinuxBrowserUseRouteLivenessPatch,
-  applyLinuxChromeExtensionStatusPatch,
-  applyLinuxChromeNativeHostRuntimePatch,
-  applyLinuxChromePluginAutoInstallPatch,
-  applyLinuxTerminalUserPathPatch,
-  applyLinuxAppUpdaterBridgePatch,
-  applyLinuxAppUpdaterMenuPatch,
-  applyLinuxAboutDialogPatch,
-  applyLinuxApplicationMenuPatch,
-  applyLinuxBuildInfoTrayPatch,
-  applyLinuxExplicitIpcQuitPatch,
-  applyLinuxExplicitQuitPromptBypassPatch,
-  applyLinuxExplicitTrayQuitPatch,
-  applyLinuxExternalOpenEnvPatch,
-  applyLinuxFileManagerPatch,
-  applyLinuxGitOriginsSourceFallbackPatch,
-  applyLinuxWorkerFileManagerPatch,
-  applyLinuxQuitGuardPatch,
-  applyLinuxHotkeyWindowPrewarmPatch,
-  applyLinuxLaunchActionArgsPatch,
-  applyLinuxSettingsPersistencePatch,
-  applyLinuxMenuPatch,
-  applyLinuxNativeTitlebarPatch,
-  applyLinuxLocalAppServerFeatureEnablementHandlerPatch,
-  applyLinuxMultiInstanceBootstrapPatch,
-  applyLinuxAppSunsetPatch,
-  applyLinuxBrowserUseAvailabilityPatch,
-  applyLinuxBrowserUseExternalAvailabilityPatch,
-  applyLinuxProjectlessXdgDocumentsDirPatch,
-  applyLinuxBrowserUseNonLocalNavigationPatch,
-  applyLinuxAppServerBackfillWaitPatch,
-  applyLinuxOpaqueBackgroundPatch,
-  applyLinuxOwlFeatureBindingFallbackPatch,
-  applyLinuxFastModeModelGuardPatch,
-  applyLinuxOpaqueWindowsDefaultPatch,
-  applyLinuxReadyToShowWindowStatePatch,
-  applyLinuxResizeRepaintPatch,
-  applyLinuxSetIconPatch,
-  applyLinuxRemoteControlConfigPreservationPatch,
-  applyLinuxSingleInstancePatch,
-  applyLinuxTrayCloseSettingPatch,
-  applyLinuxTrayPatch,
-  applyLinuxWillQuitDrainTimeoutPatch,
-  applyLinuxWindowOptionsPatch,
-  applyLinuxXdgDocumentsDirPatch,
-  applySubagentNicknameMetadataPatch,
   isComputerUseUiEnabled,
-  patchMainBundleSource,
-  patchExtractedApp,
-  patchPackageJson,
-  patchLinuxAppUpdaterBridge,
-  patchProjectlessDocumentsAssets,
-  patchKeybindsSettingsAssets,
-  patchAutomationScheduleAssets,
-  patchLinuxOwlFeatureBindingFallbackAssets,
-  createPatchReport,
-  corePatchDescriptors,
-  detectLinuxTargetContext,
-  discoverCorePatchDescriptors,
-  enabledLinuxFeatureIds,
-  linuxTargetSummary,
-  normalizePatchDescriptors,
-  parseOsRelease,
-  resolveDesktopName,
-} = require("./patch-linux-window-ui.js");
+} = require("./patches/impl/computer-use.js");
 const {
   keybindsSettingsAsset,
   linuxDesktopSettingsAsset,
+  applyLinuxDesktopSettingsIndexPatch,
   applyLinuxDesktopSettingsSectionsPatch,
   applyLinuxDesktopSettingsSharedPatch,
-} = require("./patches/keybinds-settings.js");
+  patchKeybindsSettingsAssets,
+} = require("./patches/impl/keybinds-settings.js");
+const {
+  applyLinuxAvatarOverlayMousePassthroughPatch,
+} = require("./patches/impl/avatar-overlay.js");
+const {
+  applyBrowserUseNodeReplApprovalPatch,
+  applyLinuxBrowserUseRouteLivenessPatch,
+  applyLinuxChromeExtensionStatusPatch,
+  applyLinuxExternalOpenEnvPatch,
+} = require("./patches/impl/main-process/browser.js");
+const {
+  applyLinuxChromeNativeHostRuntimePatch,
+  applyLinuxChromePluginAutoInstallPatch,
+} = require("./patches/impl/chrome-plugin.js");
+const {
+  applyLinuxAboutDialogPatch,
+  applyLinuxApplicationMenuPatch,
+  applyLinuxMenuPatch,
+  applyLinuxNativeTitlebarPatch,
+  applyLinuxOpaqueBackgroundPatch,
+  applyLinuxReadyToShowWindowStatePatch,
+  applyLinuxResizeRepaintPatch,
+  applyLinuxSetIconPatch,
+  applyLinuxWindowOptionsPatch,
+} = require("./patches/impl/main-process/window.js");
+const {
+  applyLinuxBuildInfoTrayPatch,
+  applyLinuxSingleInstancePatch,
+  applyLinuxTrayPatch,
+} = require("./patches/impl/main-process/tray.js");
+const {
+  applyLinuxExplicitIpcQuitPatch,
+  applyLinuxExplicitQuitPromptBypassPatch,
+  applyLinuxExplicitTrayQuitPatch,
+  applyLinuxQuitGuardPatch,
+  applyLinuxWillQuitDrainTimeoutPatch,
+} = require("./patches/impl/main-process/quit-lifecycle.js");
+const {
+  applyLinuxFileManagerPatch,
+  applyLinuxGitOriginsSourceFallbackPatch,
+  applyLinuxLocalAppServerFeatureEnablementHandlerPatch,
+  applyLinuxOwlFeatureBindingFallbackPatch,
+  applyLinuxRemoteControlConfigPreservationPatch,
+  applyLinuxTerminalUserPathPatch,
+  applyLinuxWorkerFileManagerPatch,
+  applyLinuxXdgDocumentsDirPatch,
+  patchLinuxOwlFeatureBindingFallbackAssets,
+} = require("./patches/impl/main-process/misc.js");
+const {
+  applyLinuxHotkeyWindowPrewarmPatch,
+  applyLinuxLaunchActionArgsPatch,
+  applyLinuxSettingsPersistencePatch,
+  applyLinuxTrayCloseSettingPatch,
+} = require("./patches/impl/launch-actions.js");
+const {
+  applyLinuxMultiInstanceBootstrapPatch,
+} = require("./patches/impl/bootstrap.js");
+const {
+  applyLinuxProjectlessXdgDocumentsDirPatch,
+  patchProjectlessDocumentsAssets,
+} = require("./patches/impl/projectless-documents.js");
+const {
+  patchPackageJson,
+  resolveDesktopName,
+} = require("./patches/impl/package-json.js");
+const {
+  patchExtractedApp,
+  patchMainBundleSource,
+  corePatchDescriptors,
+  featurePatchDescriptors,
+} = require("./patches/runner.js");
+const {
+  discoverCorePatchDescriptors,
+  normalizePatchDescriptors,
+} = require("./patches/engine.js");
+const {
+  detectLinuxTargetContext,
+  linuxTargetSummary,
+  parseOsRelease,
+} = require("./lib/linux-target-context.js");
+const {
+  enabledLinuxFeatureIds,
+} = require("./lib/linux-features.js");
+const {
+  applyLinuxAppUpdaterBridgePatch,
+  applyLinuxAppUpdaterMenuPatch,
+  patchLinuxAppUpdaterBridge,
+} = require("./lib/linux-update-bridge-patch.js");
 const {
   validateReport,
 } = require("./ci/validate-patch-report.js");
@@ -112,6 +138,7 @@ const {
   sourceInfo,
 } = require("./lib/build-info.js");
 const {
+  createPatchReport,
   criticalFailuresFromReport,
   optionalDriftFromReport,
   summarizePatchReport,
@@ -120,22 +147,31 @@ const {
   applyBrowserAnnotationScreenshotPatch,
   applyLocalEnvironmentActionModalDraftPatch,
   applyPersistentRateLimitFooterPatch,
+  applyLinuxAppServerBackfillWaitPatch,
+  applyLinuxCompletedItemRecoveryPatch,
+  applyLinuxRemoteTerminalStatusRecoveryPatch,
   applyLinuxAppServerFeatureEnablementPatch,
+  applyLinuxAppSunsetPatch,
+  applyLinuxBrowserUseAvailabilityPatch,
+  applyLinuxBrowserUseExternalAvailabilityPatch,
+  applyLinuxBrowserUseNonLocalNavigationPatch,
   applyLinuxChatSearchHydrationPatch,
   applyLinuxConfigWriteVersionConflictPatch,
+  applyLinuxFastModeModelGuardPatch,
   applyLinuxI18nGatePatch,
+  applyLinuxOpaqueWindowsDefaultPatch,
   applyLinuxProfileSettingsMenuPatch,
   applyLinuxSafeMonospaceFontStackPatch,
   applyLinuxSkillsListDedupePatch,
   applyLinuxThreadSidePanelNativeTooltipPatch,
   applyLinuxTooltipWindowControlsCollisionPatch,
   applyLinuxWindowControlsSafeAreaPatch,
-} = require("./patches/webview-assets.js");
+  applySubagentNicknameMetadataPatch,
+} = require("./patches/impl/webview/index.js");
 const {
   findCodexRequestWebviewAsset,
   patchAssetFiles,
-} = require("./patches/shared.js");
-const { featurePatchDescriptors } = require("./patches/registry.js");
+} = require("./patches/lib/assets.js");
 
 const mainBundlePrefix =
   "let n=require(`electron`),i=require(`node:path`),o=require(`node:fs`);";
@@ -606,6 +642,93 @@ test("package profile distinguishes Fedora package managers by major version", (
   assert.equal(packageProfile(fedora41).packageManager, "dnf5");
 });
 
+test("package profile identifies Fedora Atomic hosts that use rpm-ostree", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-fedora-atomic-target-"));
+  try {
+    const binDir = path.join(tempRoot, "bin");
+    const ostreeBootedPath = path.join(tempRoot, "ostree-booted");
+    fs.mkdirSync(binDir, { recursive: true });
+    for (const command of ["rpm-ostree", "rpmbuild"]) {
+      const commandPath = path.join(binDir, command);
+      fs.writeFileSync(commandPath, "#!/bin/sh\nexit 0\n", "utf8");
+      fs.chmodSync(commandPath, 0o755);
+    }
+    fs.writeFileSync(ostreeBootedPath, "", "utf8");
+
+    const fedoraAtomic = detectLinuxTargetContext({
+      osReleaseFields: {
+        ID: "fedora",
+        ID_LIKE: "",
+        VERSION_ID: "44",
+        PRETTY_NAME: "Fedora Linux 44 (KDE Plasma Desktop Edition)",
+      },
+      env: {
+        PATH: binDir,
+        OSTREE_BOOTED_FILE: ostreeBootedPath,
+      },
+    });
+
+    assert.equal(fedoraAtomic.atomic, true);
+    assert.equal(fedoraAtomic.packageFormat, "rpm");
+    assert.equal(fedoraAtomic.packageManager, "rpm-ostree");
+    assert.equal(fedoraAtomic.packageManagerIs("rpm-ostree"), true);
+    assert.equal(packageProfile(fedoraAtomic).id, "fedora-atomic");
+    assert.equal(packageProfile(fedoraAtomic).packageManager, "rpm-ostree");
+
+    const fedoraInvalidAtomicOverride = detectLinuxTargetContext({
+      osReleaseFields: {
+        ID: "fedora",
+        ID_LIKE: "",
+        VERSION_ID: "44",
+      },
+      env: {
+        PATH: binDir,
+        CODEX_LINUX_TARGET_ATOMIC: "maybe",
+        OSTREE_BOOTED_FILE: ostreeBootedPath,
+      },
+    });
+
+    assert.equal(fedoraInvalidAtomicOverride.atomic, true);
+    assert.equal(fedoraInvalidAtomicOverride.packageManager, "rpm-ostree");
+
+    const fedoraAtomicOverrideOff = detectLinuxTargetContext({
+      osReleaseFields: {
+        ID: "fedora",
+        ID_LIKE: "",
+        VERSION_ID: "44",
+      },
+      env: {
+        PATH: binDir,
+        CODEX_LINUX_TARGET_ATOMIC: "0",
+        OSTREE_BOOTED_FILE: ostreeBootedPath,
+      },
+    });
+
+    assert.equal(fedoraAtomicOverrideOff.atomic, false);
+    assert.equal(fedoraAtomicOverrideOff.packageManager, "unknown");
+    assert.equal(packageProfile(fedoraAtomicOverrideOff).id, "fedora-41-plus");
+
+    const fedoraRegular = detectLinuxTargetContext({
+      osReleaseFields: {
+        ID: "fedora",
+        ID_LIKE: "",
+        VERSION_ID: "44",
+        PRETTY_NAME: "Fedora Linux 44",
+      },
+      env: {
+        PATH: binDir,
+        OSTREE_BOOTED_FILE: path.join(tempRoot, "missing-ostree-booted"),
+      },
+    });
+
+    assert.equal(fedoraRegular.atomic, false);
+    assert.equal(fedoraRegular.packageManager, "unknown");
+    assert.equal(packageProfile(fedoraRegular).id, "fedora-41-plus");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("auto-discovered core patches can target a specific Linux distro", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-core-patch-root-"));
   try {
@@ -756,6 +879,8 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-app-sunset-gate",
     "linux-app-server-feature-enablement",
     "linux-app-server-backfill-wait",
+    "linux-completed-item-recovery",
+    "linux-remote-terminal-status-recovery",
     "linux-skills-list-dedupe",
     "linux-config-write-version-conflict",
     "linux-application-menu",
@@ -783,11 +908,11 @@ test("default core patch descriptors are grouped and unique", () => {
   assert.ok(descriptors.every((descriptor) => descriptor.sourcePath.includes(`${path.sep}core${path.sep}`)));
   assert.equal(
     descriptors.find((descriptor) => descriptor.id === "package-desktop-name")?.phase,
-    "extracted-app",
+    "extracted-app:post-webview",
   );
   assert.equal(
     descriptors.find((descriptor) => descriptor.id === "linux-owl-feature-binding-fallback")?.phase,
-    "extracted-app",
+    "extracted-app:pre-webview",
   );
   assert.match(
     descriptors.find((descriptor) => descriptor.id === "linux-chrome-plugin-auto-install")?.sourcePath,
@@ -1279,7 +1404,9 @@ function createModernNativeKeyboardShortcutsSettingsFixture() {
 // `settings-page-*.js` bundle then carries only the icon map, nav order, slug
 // groups, and visibility/loading switches. This is the layout that rendered the
 // Linux desktop nav entry with the page component injected as its icon.
-function createSplitRouteNativeKeyboardShortcutsSettingsFixture() {
+function createSplitRouteNativeKeyboardShortcutsSettingsFixture({
+  routeChunkName = "app-initial~app-main~automations-page-A.js",
+} = {}) {
   const extractedDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-split-route-shortcuts-"));
   const assetsDir = path.join(extractedDir, "webview", "assets");
   fs.mkdirSync(assetsDir, { recursive: true });
@@ -1329,7 +1456,7 @@ function createSplitRouteNativeKeyboardShortcutsSettingsFixture() {
   );
   // The hoisted lazy route map, assigned as a bare `FW={...}` inside an IIFE body.
   writeAsset(
-    "app-initial~app-main~automations-page-A.js",
+    routeChunkName,
     [
       "var Bn,Ya,Pr,FW,Xn=e((()=>{Bn=s(),Ya=t(f(),1),Pr=o(),",
       'FW={"general-settings":(0,Ya.lazy)(()=>Pr(()=>import(`./general-settings-A.js`).then(e=>({default:e.GeneralSettings})),__vite__mapDeps([1,2]))),',
@@ -2227,24 +2354,21 @@ test("recognizes the Linux removeMenu snippet as already applied", () => {
   assert.equal((patched.match(/process\.platform===`linux`&&k\.removeMenu\(\),/g) ?? []).length, 1);
 });
 
-test("suppresses the global application menu on Linux", () => {
+test("preserves the global application menu on Linux for accelerators", () => {
   const source =
     "let $e=[{role:`help`,submenu:[]}],et=n.Menu.buildFromTemplate($e);n.Menu.setApplicationMenu(et);";
   const patched = applyPatchTwice(applyLinuxApplicationMenuPatch, source);
 
-  assert.equal(
-    patched,
-    "let $e=[{role:`help`,submenu:[]}],et=n.Menu.buildFromTemplate($e);n.Menu.setApplicationMenu(process.platform===`linux`?null:et);",
-  );
+  assert.equal(patched, source);
 });
 
-test("recognizes an already Linux-suppressed application menu", () => {
+test("migrates a Linux-suppressed application menu back to the real menu", () => {
   const source =
     "let et=n.Menu.buildFromTemplate($e);n.Menu.setApplicationMenu(process.platform===`linux`?null:et);";
 
   const patched = applyPatchTwice(applyLinuxApplicationMenuPatch, source);
 
-  assert.equal(patched, source);
+  assert.equal(patched, "let et=n.Menu.buildFromTemplate($e);n.Menu.setApplicationMenu(et);");
 });
 
 test("recognizes already-applied Linux opaque background patch", () => {
@@ -4103,7 +4227,7 @@ test("fails loudly when current Codex request API asset detection is ambiguous",
 
     assert.throws(
       () => findCodexRequestWebviewAsset(assetsDir),
-      /found multiple Codex request API assets \(app-a\.js, app-b\.js\)/,
+      /Found multiple Codex request API assets \(app-a\.js, app-b\.js\)/,
     );
   } finally {
     fs.rmSync(extractedDir, { recursive: true, force: true });
@@ -4431,6 +4555,32 @@ test("adds Linux desktop settings when the lazy route map is hoisted into a sepa
     const secondResult = patchKeybindsSettingsAssets(extractedDir);
     assert.equal(secondResult.matched, true);
     assert.equal(secondResult.changed, 0);
+  } finally {
+    fs.rmSync(extractedDir, { recursive: true, force: true });
+  }
+});
+
+test("finds Linux desktop settings route map in hashed settings-page chunks", () => {
+  const routeChunkName = "app-initial~settings-page-A.js";
+  const { extractedDir, assetsDir } = createSplitRouteNativeKeyboardShortcutsSettingsFixture({
+    routeChunkName,
+  });
+  try {
+    const { value: result, warnings } = captureWarns(() => patchKeybindsSettingsAssets(extractedDir));
+
+    assert.equal(result.matched, true);
+    assert.deepEqual(warnings, []);
+    assert.equal(fs.existsSync(path.join(assetsDir, linuxDesktopSettingsAsset)), true);
+
+    const routeChunkSource = fs.readFileSync(path.join(assetsDir, routeChunkName), "utf8");
+    assert.match(
+      routeChunkSource,
+      /"linux-desktop":\(0,Ya\.lazy\)\(\(\)=>Pr\(\(\)=>import\(`\.\/linux-desktop-settings-linux\.js`\),\[\],import\.meta\.url\)\),"general-settings":/,
+    );
+
+    const settingsPageSource = fs.readFileSync(path.join(assetsDir, "settings-page-A.js"), "utf8");
+    assert.match(settingsPageSource, /"linux-desktop":wt,"general-settings":wt/);
+    assert.doesNotMatch(settingsPageSource, /codexLinuxDesktopSettings/);
   } finally {
     fs.rmSync(extractedDir, { recursive: true, force: true });
   }
@@ -4850,6 +5000,111 @@ test("keeps current app-server backfill helpers visible outside the Sentry handl
   );
   assert.equal(context.startupTimeout, 3e5);
   assert.equal(context.turnTimeout, 3e4);
+});
+
+test("recovers completed stream items that arrive after local state lost their started item", () => {
+  const source = [
+    "class T{onNotification(e,t){let n={method:e,params:t};switch(n.method){case`item/completed`:{if(this.frameTextDeltaQueue.drainBefore(()=>{this.onNotification(`item/completed`,n.params)}))break;",
+    "let{item:e,threadId:t,turnId:r,completedAtMs:i}=n.params,a=qf(t);if(!this.conversations.get(a)){$.error(`Received item/completed for unknown conversation`,{safe:{conversationId:a},sensitive:{}});break}",
+    "this.updateConversationState(a,t=>{let n=e.type===`userMessage`?gI(t,r):r==null?uI(t):fI(t,e=>e.turnId===r);if(!n)return;aR(n);",
+    "let a=Jtt({item:e,threadsById:this.threadStore.threadsById,onCollabAgentToolCall:e=>{this.hydrateCollabThreads(e.receiverThreadIds)}}),o=a.type===`contextCompaction`?n.items.find(e=>e.type===`contextCompaction`&&e.id===a.id):null;",
+    "if(a.type===`commandExecution`){let e=a.durationMs==null?null:i-a.durationMs;e!=null&&(n.commandExecutionStartedAtMsById??={},n.commandExecutionStartedAtMsById[a.id]??=e)}",
+    "let s=FF(a.type===`contextCompaction`?{...a,completed:!0,source:o?.type===`contextCompaction`&&`source`in o?o.source:`automatic`}:a);",
+    "if(e.type===`userMessage`){let t=Put(n.items,e.content,n.turnId,n.turnStartedAtMs,!1);if(t!=null){t.status=`accepted`,HI(n,FF({type:`steered`,id:e.id}));return}HI(n,s);return}",
+    "if(e.type===`hookPrompt`){HI(n,s);return}",
+    "Mut(e)&&(n.firstTurnWorkItemStartedAtMs=n.firstTurnWorkItemStartedAtMs??Date.now()),!(e.type!==`subAgentActivity`&&!TR(n,e.id,e.type))&&(e.type,HI(n,s))});break}}}}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxCompletedItemRecoveryPatch, source);
+
+  assert.match(patched, /codexLinuxCompletedItemExists=n\.items\.some\(e=>e\.id===s\.id\)/);
+  assert.match(
+    patched,
+    /if\(e\.type!==`subAgentActivity`&&codexLinuxCompletedItemExists&&!TR\(n,e\.id,e\.type\)\)return;HI\(n,s\)/,
+  );
+  assert.doesNotMatch(
+    patched,
+    /!\(e\.type!==`subAgentActivity`&&!TR\(n,e\.id,e\.type\)\)&&\(e\.type,HI\(n,s\)\)/,
+  );
+
+  const context = {};
+  vm.runInNewContext(
+    [
+      "let errors=[];",
+      "var $={error:(message,details)=>errors.push({message,details})};",
+      "function qf(e){return e}",
+      "function fI(e,t){return e.turns.find(t)}",
+      "function gI(){throw Error(`unexpected userMessage path`)}",
+      "function uI(){throw Error(`unexpected null turn path`)}",
+      "function aR(){}",
+      "function Mut(){return true}",
+      "function Jtt({item:e}){return {type:e.type,id:e.id,text:e.text??null}}",
+      "function FF(e){return e}",
+      "function HI(e,t){let n=e.items.findIndex(e=>e.id===t.id);n>=0?e.items[n]=t:e.items.push(t)}",
+      "function TR(e,t,n){let r=e.items.find(e=>e.id===t&&e.type===n);if(r)return r;$.error(`Item not found in turn state`,{safe:{itemId:t},sensitive:{}});return null}",
+      "function Put(){return null}",
+      patched,
+      "function run(items){errors=[];let turn={turnId:`turn-1`,items:items.map(e=>({...e}))},conversation={turns:[turn]},manager=new T;manager.frameTextDeltaQueue={drainBefore:()=>false};manager.conversations=new Map([[`thread-1`,{}]]);manager.threadStore={threadsById:new Map};manager.hydrateCollabThreads=()=>{};manager.updateConversationState=(id,fn)=>fn(conversation);manager.onNotification(`item/completed`,{item:{type:`agentMessage`,id:`assistant-1`,text:`done`},threadId:`thread-1`,turnId:`turn-1`,completedAtMs:100});return {items:turn.items,errors}}",
+      "result={missing:run([]),existing:run([{type:`agentMessage`,id:`assistant-1`,text:`old`}]),wrongType:run([{type:`plan`,id:`assistant-1`,text:`old`}])};",
+    ].join(";"),
+    context,
+  );
+  const behavior = JSON.parse(JSON.stringify(context.result));
+  assert.deepEqual(behavior.missing.items, [
+    { type: "agentMessage", id: "assistant-1", text: "done" },
+  ]);
+  assert.deepEqual(behavior.existing.items, [
+    { type: "agentMessage", id: "assistant-1", text: "done" },
+  ]);
+  assert.deepEqual(behavior.wrongType.items, [
+    { type: "plan", id: "assistant-1", text: "old" },
+  ]);
+  assert.equal(behavior.missing.errors.length, 0);
+  assert.equal(behavior.existing.errors.length, 0);
+  assert.equal(behavior.wrongType.errors.length, 1);
+});
+
+test("treats empty active runtime status as stale once response rendering has completed", () => {
+  const source =
+    "function LQt({hasInProgressSideChat:e,isResponseInProgress:t,latestTurnHasSystemError:n,resumeState:r,threadRuntimeStatus:i}){return e?`loading`:i?.type===`systemError`?`error`:i?.type===`active`?`loading`:r===`needs_resume`?`idle`:n?`error`:t===!0?`loading`:`idle`}";
+
+  const patched = applyPatchTwice(applyLinuxRemoteTerminalStatusRecoveryPatch, source);
+
+  assert.match(patched, /codexLinuxRemoteTerminalStatusActive=i\?\.type===`active`/);
+  assert.match(
+    patched,
+    /codexLinuxRemoteTerminalStatusLoading=codexLinuxRemoteTerminalStatusActive&&\(t===!0\|\|!Array\.isArray\(i\.activeFlags\)\|\|i\.activeFlags\.length>0\)/,
+  );
+  assert.doesNotMatch(
+    patched,
+    /i\?\.type===`active`\?`loading`:r===`needs_resume`/,
+  );
+
+  const context = {};
+  vm.runInNewContext(
+    `${patched};result={
+      stale:LQt({hasInProgressSideChat:false,isResponseInProgress:false,latestTurnHasSystemError:false,resumeState:null,threadRuntimeStatus:{type:\`active\`,activeFlags:[]}}),
+      streaming:LQt({hasInProgressSideChat:false,isResponseInProgress:true,latestTurnHasSystemError:false,resumeState:null,threadRuntimeStatus:{type:\`active\`,activeFlags:[]}}),
+      waiting:LQt({hasInProgressSideChat:false,isResponseInProgress:false,latestTurnHasSystemError:false,resumeState:null,threadRuntimeStatus:{type:\`active\`,activeFlags:[\`waitingOnUserInput\`]}}),
+      unknownShape:LQt({hasInProgressSideChat:false,isResponseInProgress:false,latestTurnHasSystemError:false,resumeState:null,threadRuntimeStatus:{type:\`active\`}}),
+      sideChat:LQt({hasInProgressSideChat:true,isResponseInProgress:false,latestTurnHasSystemError:false,resumeState:null,threadRuntimeStatus:{type:\`active\`,activeFlags:[]}}),
+      systemError:LQt({hasInProgressSideChat:false,isResponseInProgress:false,latestTurnHasSystemError:false,resumeState:null,threadRuntimeStatus:{type:\`systemError\`}}),
+      turnError:LQt({hasInProgressSideChat:false,isResponseInProgress:false,latestTurnHasSystemError:true,resumeState:null,threadRuntimeStatus:{type:\`idle\`}}),
+      needsResume:LQt({hasInProgressSideChat:false,isResponseInProgress:false,latestTurnHasSystemError:false,resumeState:\`needs_resume\`,threadRuntimeStatus:{type:\`idle\`}})
+    };`,
+    context,
+  );
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.result)), {
+    stale: "idle",
+    streaming: "loading",
+    waiting: "loading",
+    unknownShape: "loading",
+    sideChat: "loading",
+    systemError: "error",
+    turnError: "error",
+    needsResume: "idle",
+  });
 });
 
 test("skips app-server timeout rewrite when the helper insertion anchor drifts", () => {
@@ -7157,7 +7412,7 @@ test("feature patch descriptors honor explicit feature config overrides", () => 
         id: "temp-feature",
         title: "Temp Feature",
         defaultEnabled: false,
-        entrypoints: { patches: "./patch.js" },
+        entrypoints: { patchDescriptors: "./patch.js" },
       }),
     );
     fs.writeFileSync(path.join(featureDir, "README.md"), "# Temp Feature\n");
@@ -7210,7 +7465,7 @@ test("patchExtractedApp report honors explicit feature config overrides", () => 
         id: "temp-feature",
         title: "Temp Feature",
         defaultEnabled: false,
-        entrypoints: { patches: "./patch.js" },
+        entrypoints: { patchDescriptors: "./patch.js" },
       }),
     );
     fs.writeFileSync(path.join(featureDir, "README.md"), "# Temp Feature\n");
@@ -7956,7 +8211,7 @@ test("terminal user PATH patch drift is reported as optional", () => {
     writeCorePatchFixture(coreRoot, "sample/terminal-path", [
       "\"use strict\";",
       "const { applyLinuxTerminalUserPathPatch } = require(",
-      `  ${JSON.stringify(path.join(__dirname, "patches", "main-process", "misc.js"))},`,
+      `  ${JSON.stringify(path.join(__dirname, "patches", "impl", "main-process", "misc.js"))},`,
       ");",
       "module.exports = {",
       "  id: \"linux-terminal-user-path\",",
@@ -8150,7 +8405,7 @@ test("strategy telemetry recorded during apply lands on the patch report entry",
       "  ciPolicy: \"optional\",",
       "  order: 100,",
       "  apply: (source) => {",
-      "    recordStrategy(\"sample-group\", \"legacy:old-shape\");",
+      "    recordStrategy(\"sample-group\", \"upstream-alt-shape\");",
       "    return source.replace(\"codexLinuxStrategyFixture()\", \"codexLinuxStrategyPatched()\");",
       "  },",
       "};",
@@ -8165,7 +8420,7 @@ test("strategy telemetry recorded during apply lands on the patch report entry",
 
     const entry = report.patches.find((patch) => patch.name === "instrumented-sample");
     assert.equal(entry?.status, "applied");
-    assert.deepEqual(entry?.strategies, [{ group: "sample-group", strategy: "legacy:old-shape" }]);
+    assert.deepEqual(entry?.strategies, [{ group: "sample-group", strategy: "upstream-alt-shape" }]);
   } finally {
     fs.rmSync(coreRoot, { recursive: true, force: true });
     fs.rmSync(tempApp, { recursive: true, force: true });
