@@ -5,8 +5,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Cold launches no longer stall for a full second between acquiring the
+  launcher lock and spawning Electron. The CLI version log line reads the
+  probe result through command substitution, and the probe's watchdog
+  subshell inherited that pipe: its `sleep 1` child survived the watchdog
+  kill and held the pipe open until the sleep expired, so even a CLI that
+  answers `--version` in ~50 ms blocked the launch path for ~1 s. The
+  watchdog now runs detached from the caller's stdout/stderr, cutting that
+  launch phase from ~1010 ms to ~74 ms and making the window (and GNOME's
+  startup feedback) appear about a second sooner on every cold start.
+
 ### Changed
 
+- Cold starts overlap the webview server boot with the rest of launcher
+  startup and run the five bundled plugin cache syncs concurrently. The
+  launcher now spawns the Python webview server, does CLI lookup and cache
+  syncs while it boots, and only then waits for readiness and verifies the
+  origin — still strictly before Electron launches. The shared bundled
+  marketplace metadata is staged exactly once before the concurrent syncs
+  instead of being rewritten inside each sync. Measured on a warm-cache cold
+  start, the sync block drops from ~285 ms to ~110 ms and the webview wait
+  from ~150 ms to ~35 ms, putting Electron spawn ~330 ms earlier.
 - The launcher now passes `--disable-dev-shm-usage` to Electron only when
   `/dev/shm` is missing, not writable, or smaller than 1 GiB (the container
   case the flag exists for). On regular desktops Chromium's renderer/GPU

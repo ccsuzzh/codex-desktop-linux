@@ -63,13 +63,29 @@ covered. Replacing it with a Rust server was evaluated and rejected until
 evidence shows Python itself is the bottleneck — see
 [Webview server evaluation](webview-server-evaluation.md).
 
-### Serialized startup ordering
+### Startup ordering (partially overlapped)
 
-The launcher intentionally starts the webview server, verifies the origin,
-and only then launches Electron so Chromium never races a server that has
-not bound yet. The server binds in milliseconds; parallelizing the spawn
-would buy little and risk the documented startup markers and warm-start
-handoff behavior.
+The invariant is unchanged: Electron never launches before the webview
+origin is verified, so Chromium cannot race a server that has not bound
+yet. Within that constraint the cold-start path now overlaps independent
+work instead of serializing it:
+
+- The Python webview server is spawned first
+  (`start_webview_server`), and its readiness wait plus origin
+  verification run later (`await_webview_server_ready`), after the CLI
+  lookup and plugin cache syncs — the server finishes booting while the
+  launcher does unrelated work, leaving ~35 ms of residual wait instead
+  of ~150 ms.
+- The five bundled plugin cache syncs run concurrently and are all
+  awaited before cold-start hooks dispatch (~110 ms instead of ~285 ms).
+  They only touch disjoint per-plugin cache directories; the shared
+  bundled marketplace metadata they previously each rewrote is staged
+  exactly once beforehand (`stage_bundled_marketplace_metadata`), which
+  is also what makes the concurrency safe.
+
+Launching Electron itself in parallel with any of this remains rejected:
+the renderer needs a verified local origin, and the warm-start handoff
+markers depend on the current ordering.
 
 ### In-app startup latency
 
@@ -83,4 +99,13 @@ repository beyond faithfully reporting it.
 ### CLI preflight
 
 Launcher CLI preflight is best-effort, recently hardened, and not part of the
-rendering path. No performance changes were made there.
+rendering path. One launch-path cost hid there, though: the CLI version log
+line reads `codex_cli_version` through command substitution, and the probe's
+watchdog subshell inherited that pipe. Its `sleep 1` child survived the
+watchdog kill and held the pipe open, so every cold launch stalled for the
+full watchdog second even when the CLI answered in ~50 ms. The watchdog now
+runs with stdout/stderr detached (`>/dev/null 2>&1`), which cut the
+`launch_state_refreshed_under_lock` → `electron_launch` gap from ~1010 ms to
+~74 ms. When adding bounded probes, keep watchdog subshells detached from any
+caller pipe — an orphaned `sleep` holding an inherited fd blocks command
+substitution until it exits.
