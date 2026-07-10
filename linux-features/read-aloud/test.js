@@ -876,12 +876,20 @@ test("assistant render patch ignores normalized assistant items without render p
 });
 
 test("assistant render patch still warns when an assistant render candidate drifts", () => {
-  const source = "return renderMessage({item:n,assistantCopyText:p,conversationId:o,renderCodeBlocksAsWritingBlocks:V})";
+  const source = "return (0,Q.jsx)(Ov,{item:n,assistantCopyText:p,conversationId:o,renderOptions:{writingBlocks:V}})";
   const { result: patched, warnings } = captureWarnings(() => applyAssistantRenderPatch(source));
 
   assert.equal(patched, source);
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /Could not find assistant message render call/);
+});
+
+test("assistant render patch ignores the current shared component definition", () => {
+  const source = "function Bzn({item:e,assistantCopyText:n,conversationId:l,renderCodeBlocksAsWritingBlocks:C=!1}){return e.completed&&n!=null?l:null}";
+  const { result: patched, warnings } = captureWarnings(() => applyAssistantRenderPatch(source));
+
+  assert.equal(patched, source);
+  assert.deepEqual(warnings, []);
 });
 
 test("assistant render patch preserves the current JSX runtime alias", () => {
@@ -1305,7 +1313,7 @@ test("settings asset patch adds read aloud controls to generated Linux desktop s
     const asset = path.join(assets, "linux-desktop-settings-linux.js");
     fs.writeFileSync(
       asset,
-      'var React={Fragment:{}},$={jsx(){},jsxs(){}},KEYS={promptWindow:"codex-linux-prompt-window-enabled",systemTray:"codex-linux-system-tray-enabled",warmStart:"codex-linux-warm-start-enabled",autoUpdateOnExit:"codex-linux-auto-update-on-exit"};function useLinuxSetting(){}function SettingsRow(){}function SettingsSection(){}function SettingsGroup(){}function SettingsPage(){}function Toggle(){}function LinuxToggle(){}function LinuxBuildInfoPanel(){}function LinuxDesktopSettings(){return $.jsx(SettingsPage,{title:"Linux desktop",subtitle:"Launcher, tray, prompt window, and update behavior.",children:$.jsxs("div",{className:"flex flex-col gap-6",children:[$.jsxs(SettingsSection,{className:"gap-2",children:[$.jsx(SettingsSection.Header,{title:"Updates"}),$.jsx(SettingsSection.Content,{children:$.jsx(SettingsGroup,{children:$.jsx(LinuxToggle,{settingKey:KEYS.autoUpdateOnExit,label:"Install updates when you close Codex",description:"When on, a ready update waits for Codex to close and then installs. When off, updates wait until you click Update."})})})]}),$.jsxs(SettingsSection,{className:"gap-2",children:[$.jsx(SettingsSection.Header,{title:"Build"}),$.jsx(SettingsSection.Content,{children:$.jsx(SettingsGroup,{children:$.jsx(LinuxBuildInfoPanel,{})})})]})]})})}export{LinuxDesktopSettings,LinuxDesktopSettings as default};',
+      'var React={Fragment:{}},$={jsx(){},jsxs(){}},KEYS={promptWindow:"codex-linux-prompt-window-enabled",systemTray:"codex-linux-system-tray-enabled",warmStart:"codex-linux-warm-start-enabled",autoUpdateOnExit:"codex-linux-auto-update-on-exit"};function useLinuxSetting(){}function SettingsRow(){}function SettingsSection(){}function SettingsGroup(){}function SettingsPage(){}function Toggle(){}function LinuxToggle(){}function LinuxBuildInfoPanel(){}function LinuxDesktopSettings(){return $.jsx(SettingsPage,{title:"Linux desktop",subtitle:"Launcher, tray, prompt window, and update behavior.",children:$.jsxs("div",{className:"flex flex-col gap-6",children:[$.jsxs(SettingsSection,{className:"gap-2",children:[$.jsx(SettingsSection.Header,{title:"Updates"}),$.jsx(SettingsSection.Content,{children:$.jsx(SettingsGroup,{children:$.jsx(LinuxToggle,{settingKey:KEYS.autoUpdateOnExit,label:"Install updates when you close ChatGPT",description:"When on, a ready update waits for ChatGPT to close and then installs. When off, updates wait until you click Update."})})})]}),$.jsxs(SettingsSection,{className:"gap-2",children:[$.jsx(SettingsSection.Header,{title:"Build"}),$.jsx(SettingsSection.Content,{children:$.jsx(SettingsGroup,{children:$.jsx(LinuxBuildInfoPanel,{})})})]})]})})}export{LinuxDesktopSettings,LinuxDesktopSettings as default};',
     );
 
     assert.deepEqual(applySettingsAssetPatch(root), { matched: true, changed: 1 });

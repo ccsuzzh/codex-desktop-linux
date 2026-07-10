@@ -1,6 +1,6 @@
 # Architecture
 
-This repository adapts the upstream macOS Codex Desktop DMG into Linux app and
+This repository adapts the upstream macOS ChatGPT Desktop DMG into Linux app and
 package artifacts.
 
 ## Build Pipeline

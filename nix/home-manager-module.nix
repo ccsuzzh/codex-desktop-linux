@@ -31,7 +31,7 @@ let
   # Thin wrapper that bakes CODEX_CLI_PATH into the launcher. The `.desktop`
   # entry shipped by the package launches `<pkg>/bin/codex-desktop` by absolute
   # path, so wrapping that binary (and repointing the desktop entry at the
-  # wrapper) makes Codex Desktop locate the CLI no matter how it is started --
+  # wrapper) makes ChatGPT Desktop locate the CLI no matter how it is started --
   # graphical autostart, application launcher, terminal, or a warm-start handoff
   # to an already-running instance -- without depending on the session/login
   # `PATH` and without requiring a re-login for a config change to take effect.
@@ -79,7 +79,7 @@ let
 in
 {
   options.programs.codexDesktopLinux = {
-    enable = lib.mkEnableOption "Codex Desktop for Linux";
+    enable = lib.mkEnableOption "ChatGPT Desktop for Linux";
 
     package = lib.mkOption {
       type = lib.types.nullOr lib.types.package;
@@ -88,7 +88,7 @@ in
         inputs.codex-desktop-linux.packages.''${pkgs.stdenv.hostPlatform.system}.codex-desktop
       '';
       description = ''
-        Codex Desktop package to install. When unset, the module selects one of
+        ChatGPT Desktop package to install. When unset, the module selects one of
         this flake's package variants from
         {option}`programs.codexDesktopLinux.computerUseUi.enable` and
         {option}`programs.codexDesktopLinux.remoteMobileControl.enable`.
@@ -101,10 +101,10 @@ in
       defaultText = lib.literalExpression "pkgs.codex";
       example = lib.literalExpression "pkgs.codex";
       description = ''
-        Codex CLI package that Codex Desktop should launch. When set, the
-        installed Codex Desktop launcher (and its `.desktop` entry) is wrapped so
+        Codex CLI package that ChatGPT Desktop should launch. When set, the
+        installed ChatGPT Desktop launcher (and its `.desktop` entry) is wrapped so
         it always starts with {env}`CODEX_CLI_PATH` pointing at this package's
-        `codex` binary. This lets Codex Desktop locate the CLI regardless of how
+        `codex` binary. This lets ChatGPT Desktop locate the CLI regardless of how
         it is started — graphical autostart, application launcher, terminal, or a
         warm-start handoff to an already-running instance — without depending on
         the session/login {env}`PATH` and without requiring a re-login for the
@@ -114,7 +114,7 @@ in
         When unset, the module falls back to
         {option}`programs.codexDesktopLinux.remoteControl.package` if
         {option}`programs.codexDesktopLinux.remoteControl.enable` is set;
-        otherwise the launcher is left unwrapped and Codex Desktop relies on
+        otherwise the launcher is left unwrapped and ChatGPT Desktop relies on
         discovering `codex` on {env}`PATH`.
       '';
     };

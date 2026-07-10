@@ -1,6 +1,6 @@
 # Nix
 
-Run Codex Desktop for Linux directly with:
+Run ChatGPT Desktop for Linux directly with:
 
 ```bash
 nix run github:ilysenko/codex-desktop-linux
@@ -13,14 +13,14 @@ the next bot run and retry.
 
 ## Codex CLI Requirement
 
-Codex Desktop still needs the Codex CLI at runtime. The Nix package in this
+ChatGPT Desktop still needs the Codex CLI at runtime. The Nix package in this
 repository does not install or maintain the CLI for you; it only needs a
 working `codex` binary. Put `codex` on your user `PATH`, or set
-`CODEX_CLI_PATH` to the exact binary that Codex Desktop should launch.
+`CODEX_CLI_PATH` to the exact binary that ChatGPT Desktop should launch.
 
 Relying on `PATH` alone is fragile: a graphical autostart entry, an application
 launcher, or a warm-start handoff to an already-running instance may not have
-your Nix profile on `PATH`, in which case Codex Desktop fails with
+your Nix profile on `PATH`, in which case ChatGPT Desktop fails with
 `Unable to locate the Codex CLI binary. Set CODEX_CLI_PATH ...`. Pinning the CLI
 explicitly avoids this. The Home Manager and NixOS modules can do this for you
 via [`programs.codexDesktopLinux.cliPackage`](#home-manager-nixos-module),
@@ -29,8 +29,11 @@ which wraps the launcher so `CODEX_CLI_PATH` is always set.
 One direct upstream install path is the npm package:
 
 ```bash
-npm i -g @openai/codex
+npm i -g --include=optional @openai/codex
 ```
+
+The `--include=optional` flag ensures npm also installs the Linux platform
+binary package that the CLI loads at runtime.
 
 ### Community Nix CLI Packages
 
@@ -42,7 +45,7 @@ build recipe, binary cache, or support policy.
 Use it only if that trade-off makes sense for your configuration. Pin it to a
 tag or commit for reproducibility, review the flake and cache trust settings
 before using them, and report package/cache-specific issues to that project.
-Issues in this repository should be limited to Codex Desktop discovering and
+Issues in this repository should be limited to ChatGPT Desktop discovering and
 launching a working CLI binary.
 
 The community flake exposes Nix packages for the native binary and Node.js
@@ -89,7 +92,7 @@ For a declarative NixOS cache configuration:
 }
 ```
 
-Then install its package next to Codex Desktop from Home Manager:
+Then install its package next to ChatGPT Desktop from Home Manager:
 
 ```nix
 { inputs, pkgs, ... }:
@@ -111,7 +114,7 @@ in
 }
 ```
 
-Setting `cliPackage` wraps the installed Codex Desktop launcher (and its
+Setting `cliPackage` wraps the installed ChatGPT Desktop launcher (and its
 `.desktop` entry) so it always starts with `CODEX_CLI_PATH` pointing at the
 package's `codex` binary. Because the value is baked into the launcher rather
 than exported as a session variable, it works for graphical, terminal, and
@@ -206,7 +209,7 @@ systemd instead of the Desktop launcher:
 }
 ```
 
-This installs the selected Codex Desktop package variant and starts a user
+This installs the selected ChatGPT Desktop package variant and starts a user
 `codex-remote-control.service` with:
 
 ```text

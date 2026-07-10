@@ -92,9 +92,10 @@ stage_linux_computer_use_plugin() {
     chmod 0755 "$target_plugin/bin/codex-computer-use-linux"
     chmod 0755 "$target_plugin/bin/codex-computer-use-cosmic"
 
-    if [ -f "$ICON_SOURCE" ]; then
+    local plugin_icon_source="${LINUX_ICON_SOURCE:-$ICON_SOURCE}"
+    if [ -f "$plugin_icon_source" ]; then
         mkdir -p "$target_plugin/assets"
-        cp "$ICON_SOURCE" "$target_plugin/assets/app-icon.png"
+        cp "$plugin_icon_source" "$target_plugin/assets/app-icon.png"
     fi
 
     find "$target_plugin" \( -name '*:com.apple.*' -o -name '.gitkeep' \) -delete

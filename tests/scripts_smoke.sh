@@ -178,6 +178,138 @@ test_extract_webview_replaces_linux_icon_assets() {
     assert_contains "$output_log" "Linux app icon applied to 2 webview asset(s)"
 }
 
+test_installer_prefers_compact_upstream_chatgpt_icon() {
+    info "Checking installer prefers the compact upstream ChatGPT icon"
+    local workspace="$TMP_DIR/chatgpt-icon-selection"
+    local work_dir="$workspace/work"
+    local app_dir="$workspace/ChatGPT.app"
+    local compact_icon="$work_dir/app-extracted/webview/assets/referral-modal-chatgpt-blossom-test.png"
+    local full_size_icon="$app_dir/Contents/Resources/icon-chatgpt.png"
+    local selection_file="$workspace/selection.txt"
+
+    mkdir -p "$(dirname "$compact_icon")" "$(dirname "$full_size_icon")"
+    cp "$REPO_DIR/assets/codex-linux.png" "$compact_icon"
+    printf '%s\n' full-size > "$full_size_icon"
+
+    (
+        export CODEX_INSTALLER_SOURCE_ONLY=1
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/install.sh"
+        WORK_DIR="$work_dir"
+        LINUX_ICON_SOURCE=""
+        select_linux_icon_source
+        printf '%s\n' "$LINUX_ICON_SOURCE" > "$selection_file"
+    )
+
+    [ "$(cat "$selection_file")" = "$compact_icon" ] \
+        || fail "Expected compact upstream ChatGPT icon to win over the full-size resource icon"
+
+    rm -f "$compact_icon"
+    (
+        export CODEX_INSTALLER_SOURCE_ONLY=1
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/install.sh"
+        WORK_DIR="$work_dir"
+        LINUX_ICON_SOURCE=""
+        select_linux_icon_source
+        printf '%s\n' "$LINUX_ICON_SOURCE" > "$selection_file"
+    )
+
+    [ "$(cat "$selection_file")" = "$REPO_DIR/assets/codex-linux.png" ] \
+        || fail "Expected a missing compact ChatGPT icon to avoid the oversized upstream app icon"
+
+    mkdir -p "$(dirname "$compact_icon")"
+    cp "$REPO_DIR/assets/codex-linux.png" "$compact_icon"
+    python3 - "$compact_icon" <<'PY'
+import struct
+import sys
+
+with open(sys.argv[1], "r+b") as icon_file:
+    icon_file.seek(16)
+    icon_file.write(struct.pack(">II", 2048, 2048))
+PY
+    (
+        export CODEX_INSTALLER_SOURCE_ONLY=1
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/install.sh"
+        WORK_DIR="$work_dir"
+        LINUX_ICON_SOURCE=""
+        select_linux_icon_source
+        printf '%s\n' "$LINUX_ICON_SOURCE" > "$selection_file"
+    )
+
+    [ "$(cat "$selection_file")" = "$REPO_DIR/assets/codex-linux.png" ] \
+        || fail "Expected an oversized upstream ChatGPT icon to fall back safely"
+}
+
+test_user_local_icon_prefers_generated_app_icon() {
+    info "Checking user-local integration reuses the generated ChatGPT icon"
+    local workspace="$TMP_DIR/user-local-chatgpt-icon"
+    local home_dir="$workspace/home"
+    local generated_icon="$home_dir/.local/opt/codex-desktop-linux/codex-app/.codex-linux/codex-desktop.png"
+
+    mkdir -p "$(dirname "$generated_icon")"
+    printf '%s\n' 'generated-chatgpt-icon' > "$generated_icon"
+
+    (
+        HOME="$home_dir"
+        XDG_DATA_HOME="$home_dir/.local/share"
+        XDG_STATE_HOME="$home_dir/.local/state"
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/contrib/user-local-install/files/.local/lib/codex-desktop-linux/common.sh"
+        extract_icon
+        cmp -s "$generated_icon" "$ICON_PATH"
+    ) || fail "Expected user-local integration to reuse the generated ChatGPT icon"
+}
+
+test_extract_webview_requires_entrypoint() {
+    info "Checking webview extraction rejects incomplete upstream assets"
+    local workspace="$TMP_DIR/webview-required-entrypoint"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$workspace/missing-dir/work/app-extracted" \
+        "$workspace/missing-dir/install" \
+        "$workspace/missing-index/work/app-extracted/webview/assets" \
+        "$workspace/missing-index/install"
+    printf '%s\n' 'asset' > "$workspace/missing-index/work/app-extracted/webview/assets/app-main.png"
+
+    set +e
+    (
+        SCRIPT_DIR="$REPO_DIR"
+        INSTALL_DIR="$workspace/missing-dir/install"
+        WORK_DIR="$workspace/missing-dir/work"
+        ICON_SOURCE="$workspace/icon.png"
+        CODEX_LINUX_ICON_SOURCE="$workspace/icon.png"
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        warn() { echo "[WARN] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/webview-install.sh"
+        extract_webview "$workspace/Codex.app"
+    ) >"$output_log" 2>&1
+    local rc=$?
+    set -e
+    [ "$rc" -ne 0 ] || fail "extract_webview should fail when upstream webview directory is missing"
+    assert_contains "$output_log" "Webview directory not found"
+
+    set +e
+    (
+        SCRIPT_DIR="$REPO_DIR"
+        INSTALL_DIR="$workspace/missing-index/install"
+        WORK_DIR="$workspace/missing-index/work"
+        ICON_SOURCE="$workspace/icon.png"
+        CODEX_LINUX_ICON_SOURCE="$workspace/icon.png"
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        warn() { echo "[WARN] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/webview-install.sh"
+        extract_webview "$workspace/Codex.app"
+    ) >"$output_log" 2>&1
+    rc=$?
+    set -e
+    [ "$rc" -ne 0 ] || fail "extract_webview should fail when upstream webview/index.html is missing"
+    assert_contains "$output_log" "Missing webview entrypoint"
+}
+
 test_common_helper_sourcing() {
     info "Checking shared packaging helpers"
     local probe_file="$TMP_DIR/probe.txt"
@@ -186,6 +318,54 @@ test_common_helper_sourcing() {
     # shellcheck disable=SC1091
     source "$REPO_DIR/scripts/lib/package-common.sh"
     ensure_file_exists "$probe_file" "probe file"
+}
+
+test_package_icon_source_resolution() {
+    info "Checking shared package icon source resolution"
+    local workspace="$TMP_DIR/package-icon-source"
+    local app_dir="$workspace/app"
+    local generated_icon="$app_dir/.codex-linux/codex-desktop.png"
+    local explicit_icon="$workspace/explicit.png"
+
+    mkdir -p "$(dirname "$generated_icon")"
+    printf '%s\n' 'generated-chatgpt-icon' > "$generated_icon"
+    printf '%s\n' 'explicit-chatgpt-icon' > "$explicit_icon"
+
+    # shellcheck disable=SC1091
+    source "$REPO_DIR/scripts/lib/package-common.sh"
+    APP_DIR="$app_dir"
+    PACKAGE_NAME="side-by-side-chatgpt"
+    PACKAGE_ICON_SOURCE=""
+    [ "$(resolve_package_icon_source)" = "$generated_icon" ] \
+        || fail "Expected a unique generated app icon to survive a custom package name"
+
+    PACKAGE_ICON_SOURCE="$explicit_icon"
+    [ "$(resolve_package_icon_source)" = "$explicit_icon" ] \
+        || fail "Expected PACKAGE_ICON_SOURCE to take precedence"
+}
+
+test_package_layout_requires_webview_entrypoint() {
+    info "Checking package helpers reject an app without webview/index.html"
+    local workspace="$TMP_DIR/package-webview-entrypoint"
+    local app_dir="$workspace/app"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$app_dir/content/webview"
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$app_dir/start.sh"
+    chmod +x "$app_dir/start.sh"
+
+    set +e
+    (
+        APP_DIR="$app_dir"
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/package-common.sh"
+        ensure_app_layout
+    ) >"$output_log" 2>&1
+    local rc=$?
+    set -e
+
+    [ "$rc" -ne 0 ] || fail "ensure_app_layout should fail when webview/index.html is missing"
+    assert_contains "$output_log" "Missing webview entrypoint"
 }
 
 test_package_payload_permission_normalization() {
@@ -1190,11 +1370,16 @@ test_missing_input_failure() {
     local workspace="$TMP_DIR/missing"
     local bin_dir="$workspace/bin"
     local rpm_app_dir="$workspace/rpm-app"
+    local rpm_no_webview_app_dir="$workspace/rpm-no-webview-app"
     local rpm_log="$workspace/rpm-missing-runtime.log"
+    local rpm_no_webview_log="$workspace/rpm-missing-webview.log"
 
     mkdir -p "$workspace"
     make_stub_bin_dir "$bin_dir"
     make_fake_app "$rpm_app_dir"
+    mkdir -p "$rpm_no_webview_app_dir/content/webview"
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$rpm_no_webview_app_dir/start.sh"
+    chmod +x "$rpm_no_webview_app_dir/start.sh"
     cat > "$bin_dir/dpkg" <<'SCRIPT'
 #!/usr/bin/env bash
 echo amd64
@@ -1208,6 +1393,11 @@ SCRIPT
     if PATH="$bin_dir:$PATH" APP_DIR_OVERRIDE="$workspace/does-not-exist" PKG_ROOT_OVERRIDE="$workspace/deb-root" bash "$REPO_DIR/scripts/build-deb.sh" >/dev/null 2>&1; then
         fail "build-deb.sh should fail when APP_DIR is missing"
     fi
+
+    if APP_DIR_OVERRIDE="$rpm_no_webview_app_dir" PACKAGE_WITH_UPDATER=0 bash "$REPO_DIR/scripts/build-rpm.sh" >"$rpm_no_webview_log" 2>&1; then
+        fail "build-rpm.sh should fail when webview/index.html is missing"
+    fi
+    assert_contains "$rpm_no_webview_log" "Missing webview entrypoint"
 
     if APP_DIR_OVERRIDE="$rpm_app_dir" PACKAGED_RUNTIME_SOURCE="$workspace/does-not-exist.sh" bash "$REPO_DIR/scripts/build-rpm.sh" >"$rpm_log" 2>&1; then
         fail "build-rpm.sh should fail when PACKAGED_RUNTIME_SOURCE is missing"
@@ -1353,7 +1543,7 @@ test_installer_refreshes_stale_cached_dmg_metadata() {
     info "Checking installer DMG cache freshness metadata branches"
     local workspace="$TMP_DIR/dmg-cache-refresh"
     local bin_dir="$workspace/bin"
-    local url="https://persistent.oaistatic.com/codex-app-prod/Codex.dmg"
+    local url="https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg"
     local url_sha256
 
     url_sha256="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
@@ -1609,7 +1799,7 @@ test_extract_dmg_repairs_safe_7z_link_warnings() {
     local bin_dir="$workspace/bin"
     local work_dir="$workspace/work"
     local output_log="$workspace/output.log"
-    local app_dir="$work_dir/dmg-extract/Codex Installer/Codex.app"
+    local app_dir="$work_dir/dmg-extract/ChatGPT Installer/ChatGPT.app"
     local node_modules="$app_dir/Contents/Resources/cua_node/lib/node_modules"
     local actual
 
@@ -1630,7 +1820,7 @@ for arg in "$@"; do
 done
 [ -n "$out" ] || exit 2
 
-app="$out/Codex Installer/Codex.app"
+app="$out/ChatGPT Installer/ChatGPT.app"
 node_modules="$app/Contents/Resources/cua_node/lib/node_modules"
 mkdir -p \
     "$node_modules/.bin" \
@@ -1662,15 +1852,15 @@ printf '%s\n' "target" >"$node_modules/@oai/sky/bin/linux/sky_linux_x64"
 : >"$node_modules/sharp/node_modules/.bin/semver"
 
 cat <<'LOG'
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/.bin/opencollective-postinstall : ../opencollective-postinstall/index.js
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/.bin/pixelmatch : ../pixelmatch/bin/pixelmatch
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/.bin/playwright : ../playwright/cli.js
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/.bin/playwright-core : ../playwright-core/cli.js
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/.bin/semver : ../semver/bin/semver.js
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/.bin/sky_linux_arm64 : ../@oai/sky/bin/linux/sky_linux_arm64
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/.bin/sky_linux_x64 : ../@oai/sky/bin/linux/sky_linux_x64
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/tesseract.js/node_modules/.bin/opencollective-postinstall : ../../../opencollective-postinstall/index.js
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/sharp/node_modules/.bin/semver : ../../../semver/bin/semver.js
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/.bin/opencollective-postinstall : ../opencollective-postinstall/index.js
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/.bin/pixelmatch : ../pixelmatch/bin/pixelmatch
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/.bin/playwright : ../playwright/cli.js
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/.bin/playwright-core : ../playwright-core/cli.js
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/.bin/semver : ../semver/bin/semver.js
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/.bin/sky_linux_arm64 : ../@oai/sky/bin/linux/sky_linux_arm64
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/.bin/sky_linux_x64 : ../@oai/sky/bin/linux/sky_linux_x64
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/tesseract.js/node_modules/.bin/opencollective-postinstall : ../../../opencollective-postinstall/index.js
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/sharp/node_modules/.bin/semver : ../../../semver/bin/semver.js
 
 Sub items Errors: 9
 
@@ -1697,7 +1887,7 @@ error() { echo "[ERROR] $*" >&2; exit 1; }
 source "$REPO_DIR/scripts/lib/dmg.sh"
 
 app_dir="$(extract_dmg "$TEST_DMG_PATH")"
-[ "$(basename "$app_dir")" = "Codex.app" ]
+[ "$(basename "$app_dir")" = "ChatGPT.app" ]
 SCRIPT
 
     assert_contains "$output_log" "7z reported 9 safe package symlink warnings; repaired and continuing"
@@ -1798,7 +1988,7 @@ test_fresh_reuse_dmg_uses_cache_when_metadata_matches() {
     local bin_dir="$workspace/bin"
     local source_dir="$workspace/source"
     local output_log="$workspace/output.log"
-    local url="https://persistent.oaistatic.com/codex-app-prod/Codex.dmg"
+    local url="https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg"
     local url_sha256
 
     url_sha256="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
@@ -2829,7 +3019,7 @@ make_update_nix_hash_fixture() {
   electronVersion = "42.1.0";
 
   codexDmg = pkgs.fetchurl {
-    url = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
+    url = "https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg";
     hash = "$hash_a";
   };
 
@@ -3526,12 +3716,15 @@ test_bundled_plugin_builders_accept_prebuilt_binaries() {
     local backend="$workspace/codex-computer-use-linux"
     local cosmic="$workspace/codex-computer-use-cosmic"
     local host="$workspace/codex-chrome-extension-host"
+    local chatgpt_icon="$workspace/chatgpt.png"
+    local staged_plugins="$workspace/plugins"
     local output_log="$workspace/output.log"
 
     mkdir -p "$workspace"
     printf '#!/usr/bin/env bash\n' > "$backend"
     printf '#!/usr/bin/env bash\n' > "$cosmic"
     printf '#!/usr/bin/env bash\n' > "$host"
+    printf '%s\n' 'chatgpt-icon' > "$chatgpt_icon"
     chmod +x "$backend" "$cosmic" "$host"
 
     (
@@ -3539,6 +3732,8 @@ test_bundled_plugin_builders_accept_prebuilt_binaries() {
         CODEX_LINUX_COMPUTER_USE_BACKEND_SOURCE="$backend"
         CODEX_LINUX_COMPUTER_USE_COSMIC_SOURCE="$cosmic"
         CODEX_CHROME_EXTENSION_HOST_SOURCE="$host"
+        LINUX_ICON_SOURCE="$chatgpt_icon"
+        ICON_SOURCE="$REPO_DIR/assets/codex.png"
         info() { echo "[INFO] $*" >&2; }
         warn() { echo "[WARN] $*" >&2; }
         error() { echo "[ERROR] $*" >&2; exit 1; }
@@ -3546,6 +3741,7 @@ test_bundled_plugin_builders_accept_prebuilt_binaries() {
         source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
         build_linux_computer_use_backend
         build_chrome_extension_host
+        stage_linux_computer_use_plugin "$staged_plugins"
     ) > "$output_log" 2>&1
 
     assert_contains "$output_log" "Using prebuilt Linux Computer Use backend"
@@ -3553,6 +3749,134 @@ test_bundled_plugin_builders_accept_prebuilt_binaries() {
     assert_contains "$output_log" "$backend"
     assert_contains "$output_log" "$cosmic"
     assert_contains "$output_log" "$host"
+    cmp -s "$chatgpt_icon" "$staged_plugins/computer-use/assets/app-icon.png" \
+        || fail "Expected the bundled Computer Use plugin to use the selected ChatGPT icon"
+}
+
+test_launcher_managed_node_handles_unset_path() {
+    info "Checking managed Node PATH setup without an inherited PATH"
+    local workspace="$TMP_DIR/launcher-unset-path"
+    local probe="$workspace/probe.sh"
+    local managed_node_bin_dir
+
+    managed_node_bin_dir="$(dirname "$(command -v node)")"
+    mkdir -p "$workspace"
+
+    cat > "$probe" <<EOF
+#!/usr/bin/env bash
+set -u
+SCRIPT_DIR=$(printf '%q' "$workspace")
+MANAGED_NODE_BIN_DIR=$(printf '%q' "$managed_node_bin_dir")
+EOF
+    awk '
+        /^prepend_managed_node_runtime_to_path\(\) \{/ { capture = 1 }
+        capture { print }
+        capture && /^}/ { exit }
+    ' "$REPO_DIR/launcher/start.sh.template" >> "$probe"
+    cat >> "$probe" <<'EOF'
+unset CODEX_LINUX_USER_PATH
+unset PATH
+prepend_managed_node_runtime_to_path
+[ "$PATH" = "$MANAGED_NODE_BIN_DIR" ] || exit 2
+[ "${CODEX_LINUX_USER_PATH+x}" = x ] || exit 3
+[ -z "$CODEX_LINUX_USER_PATH" ] || exit 4
+[ "$CODEX_MANAGED_NODE_RUNTIME_DIR" = "$SCRIPT_DIR/resources/node-runtime" ] || exit 5
+
+PATH="/tmp/untrusted:$MANAGED_NODE_BIN_DIR:/usr/bin"
+unset CODEX_LINUX_USER_PATH
+prepend_managed_node_runtime_to_path
+case "$PATH" in
+    "$MANAGED_NODE_BIN_DIR":*) ;;
+    *) exit 6 ;;
+esac
+[ "$CODEX_LINUX_USER_PATH" = "/tmp/untrusted:$MANAGED_NODE_BIN_DIR:/usr/bin" ] || exit 7
+EOF
+
+    /usr/bin/bash "$probe" || fail "Expected managed Node PATH setup to tolerate an unset PATH"
+}
+
+test_launcher_rejects_missing_webview_entrypoint() {
+    info "Checking launcher rejects an app without webview/index.html"
+    local workspace="$TMP_DIR/launcher-webview-entrypoint"
+    local app_dir="$workspace/app"
+    local home_dir="$workspace/home"
+    local runtime_dir="$workspace/runtime"
+    local electron_marker="$workspace/electron-called"
+    local launcher_log="$home_dir/.cache/codex-desktop/launcher.log"
+
+    mkdir -p \
+        "$app_dir/.codex-linux/cold-start.d" \
+        "$app_dir/.codex-linux/env.d" \
+        "$app_dir/.codex-linux/features" \
+        "$app_dir/.codex-linux/prelaunch.d" \
+        "$app_dir/.codex-linux/electron-args.d" \
+        "$app_dir/.codex-linux/launcher.d" \
+        "$app_dir/.codex-linux/after-exit.d" \
+        "$app_dir/content/webview" \
+        "$app_dir/resources/node-runtime/bin" \
+        "$app_dir/resources/plugins/openai-bundled/.agents/plugins" \
+        "$app_dir/resources/plugins/openai-bundled/plugins" \
+        "$home_dir" \
+        "$runtime_dir"
+
+    {
+        printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            'set -Eeuo pipefail' \
+            'CODEX_LINUX_APP_ID=codex-desktop' \
+            'CODEX_LINUX_APP_DISPLAY_NAME="Codex Desktop"' \
+            'CODEX_LINUX_WEBVIEW_PORT="${CODEX_WEBVIEW_PORT:-5175}"'
+        cat "$REPO_DIR/launcher/start.sh.template"
+    } > "$app_dir/start.sh"
+    chmod +x "$app_dir/start.sh"
+    cp "$REPO_DIR/launcher/webview-server.py" "$app_dir/.codex-linux/webview-server.py"
+    ln -s "$(command -v node)" "$app_dir/resources/node-runtime/bin/node"
+
+    cat > "$app_dir/electron" <<'SCRIPT'
+#!/usr/bin/env bash
+printf '%s\n' "${ELECTRON_RENDERER_URL:-}" > "$ELECTRON_MARKER"
+exit 0
+SCRIPT
+    chmod +x "$app_dir/electron"
+
+    set +e
+    timeout 20 env -i \
+        PATH="/usr/bin:/bin:/usr/local/bin" \
+        HOME="$home_dir" \
+        XDG_RUNTIME_DIR="$runtime_dir" \
+        CODEX_CLI_PATH=/bin/true \
+        CODEX_WEBVIEW_PORT=45675 \
+        ELECTRON_MARKER="$electron_marker" \
+        "$app_dir/start.sh" >/dev/null 2>&1
+    local rc=$?
+    set -e
+
+    [ "$rc" -ne 124 ] || fail "Launcher hung while handling a missing webview entrypoint"
+    [ "$rc" -ne 0 ] || fail "Launcher should fail when webview/index.html is missing"
+    [ ! -e "$electron_marker" ] || fail "Launcher should not reach Electron when webview/index.html is missing"
+    assert_contains "$launcher_log" "webview bundle is incomplete"
+
+    rm -f "$electron_marker"
+    set +e
+    timeout 20 env -i \
+        PATH="/usr/bin:/bin:/usr/local/bin" \
+        HOME="$home_dir" \
+        XDG_RUNTIME_DIR="$runtime_dir" \
+        CODEX_CLI_PATH=/bin/true \
+        CODEX_WEBVIEW_PORT=45675 \
+        CODEX_LINUX_ALLOW_RENDERER_URL_OVERRIDE=1 \
+        ELECTRON_RENDERER_URL="http://127.0.0.1:9999/" \
+        ELECTRON_MARKER="$electron_marker" \
+        "$app_dir/start.sh" >/dev/null 2>&1
+    rc=$?
+    set -e
+
+    [ "$rc" -ne 124 ] || fail "Launcher hung while using an explicit renderer URL override"
+    [ "$rc" -eq 0 ] || fail "Launcher should allow an explicit renderer URL override without local webview assets"
+    assert_file_exists "$electron_marker"
+    [ "$(cat "$electron_marker")" = "http://127.0.0.1:9999/" ] \
+        || fail "Launcher should preserve explicit renderer URL override"
+    assert_contains "$launcher_log" "Skipping packaged webview setup because ELECTRON_RENDERER_URL override is enabled"
 }
 
 test_launcher_template_sanity() {
@@ -3798,9 +4122,9 @@ if "if needs_cold_start;" not in runtime_body:
     raise SystemExit("second-instance handoff must skip CLI preflight")
 if 'run_cold_start_hooks' not in runtime_body:
     raise SystemExit("cold start must run feature-staged hooks before Electron launches")
-if 'export CODEX_LINUX_USER_PATH="${PATH:-}"' not in source:
+if 'local current_path="${PATH:-}"' not in source or 'export CODEX_LINUX_USER_PATH="$current_path"' not in source:
     raise SystemExit("launcher must capture the user PATH before prepending the managed Node runtime")
-if source.index('export CODEX_LINUX_USER_PATH="${PATH:-}"') > source.index('export PATH="$MANAGED_NODE_BIN_DIR:$PATH"'):
+if source.index('export CODEX_LINUX_USER_PATH="$current_path"') > source.index('export PATH="$MANAGED_NODE_BIN_DIR${current_path:+:$current_path}"'):
     raise SystemExit("launcher must capture CODEX_LINUX_USER_PATH before mutating PATH for Electron")
 for name, body in (("prelaunch", prelaunch_hooks_body), ("cold-start", cold_start_hooks_body), ("launcher", launcher_hooks_body)):
     if 'CODEX_HOME="$CODEX_HOME"' not in body:
@@ -4387,7 +4711,7 @@ EOF
     assert_contains "$REPO_DIR/scripts/lib/process-detection.sh" "CODEX_INSTALL_ALLOW_RUNNING"
     assert_contains "$REPO_DIR/scripts/lib/process-detection.sh" "assert_install_target_not_running"
     assert_contains "$REPO_DIR/scripts/lib/process-detection.sh" "find_running_install_target_pid"
-    assert_contains "$REPO_DIR/scripts/lib/process-detection.sh" "Codex Desktop is currently running from"
+    assert_contains "$REPO_DIR/scripts/lib/process-detection.sh" "ChatGPT Desktop is currently running from"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "prompt_install_missing_cli"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "prompt-install-cli"
     assert_contains "$REPO_DIR/launcher/start.sh.template" '.npm-global/bin/codex'
@@ -5528,31 +5852,16 @@ test_linux_translucent_sidebar_default_patch_smoke() {
     make_fake_extracted_asar \
         "$extracted" \
         'let D={removeMenu(){},setMenuBarVisibility(){},setIcon(){},once(){}};let n=require(`electron`),t=require(`node:path`),a=require(`node:fs`);...process.platform===`win32`?{autoHideMenuBar:!0}:{},process.platform===`win32`&&D.removeMenu(),foo)}),D.once(`ready-to-show`,()=>{var sa=Mi({id:`fileManager`,label:`Finder`,icon:`apps/finder.png`,kind:`fileManager`,darwin:{detect:()=>`open`,args:e=>ai(e)},win32:{label:`File Explorer`,icon:`apps/file-explorer.png`,detect:ca,args:e=>ai(e),open:async({path:e})=>la(e)}});function ca(){let e=1;return e}async function la(e){let t=ua(e);if(t&&(0,a.statSync)(t).isFile()){n.shell.showItemInFolder(t);return}let r=t??e,i=await n.shell.openPath(r);if(i)throw Error(i)}function ua(e){return e}var Ua=Mi({id:`systemDefault`,label:`System Default App`,icon:`apps/file-explorer.png`,kind:`systemDefault`,hidden:!0,darwin:{icon:`apps/finder.png`,detect:()=>`system-default`,iconPath:()=>null,args:e=>[e],open:async({path:e})=>Wa(e)},win32:{detect:()=>`system-default`,iconPath:()=>null,args:e=>[e],open:async({path:e})=>Wa(e)},linux:{detect:()=>`system-default`,iconPath:()=>null,args:e=>[e],open:async({path:e})=>Wa(e)}});async function Wa(e){return e}' \
-        'function settings(){let d=ot(r,e),f=at(e),p={codeThemeId:tt(a,e).id,theme:d},x=`settings.general.appearance.chromeTheme.translucentSidebar`;return {p,x}}' \
-        'function runtime(){let o=`light`,a=`electron`,l=null,f=null,C=fl(l,`light`),w=fl(f,`dark`);let T=o===`light`?C:w,E;if(T.opaqueWindows&&!XZ()){document.body.classList.add(`electron-opaque`);return E}return E}'
-    cat > "$extracted/webview/assets/app-main-test.js" <<'JS'
-let{data:c}=Qc(y.APPEARANCE_LIGHT_CHROME_THEME,s),l;let{data:u}=Qc(y.APPEARANCE_DARK_CHROME_THEME,l),d;let x=b,S;let C=o===`light`?x:S,w;if(C.opaqueWindows&&!ba()){e.classList.add(`electron-opaque`)}
-JS
-    cat > "$extracted/webview/assets/diff-view-mode-test.js" <<'JS'
-function oe(e,t){let n=o[t];return{accent:p(e?.accent)??n.accent,contrast:se(e?.contrast,n.contrast),fonts:le(e?.fonts),ink:p(e?.ink)??n.ink,opaqueWindows:e?.opaqueWindows??n.opaqueWindows,semanticColors:ue(e?.semanticColors,n.semanticColors),surface:p(e?.surface)??n.surface}}
-JS
+        'function settings(){let{canImportThemeString:u,setThemePatch:b,theme:x}=p(t),S=vn(r,t),k=[{label:i}],A=[];return x.opaqueWindows}' \
+        ''
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
-    assert_contains "$extracted/webview/assets/general-settings-test.js" 'navigator.userAgent.includes(`Linux`)&&r?.opaqueWindows==null&&(d={...d,opaqueWindows:!0})'
-    assert_contains "$extracted/webview/assets/index-test.js" 'document.documentElement.dataset.codexOs===`linux`&&((o===`light`?l:f)?.opaqueWindows==null&&(T={...T,opaqueWindows:!0}))'
-    assert_contains "$extracted/webview/assets/app-main-test.js" 'document.documentElement.dataset.codexOs===`linux`&&((o===`light`?c:u)?.opaqueWindows==null&&(C={...C,opaqueWindows:!0}))'
-    assert_contains "$extracted/webview/assets/diff-view-mode-test.js" 'opaqueWindows:e?.opaqueWindows??(typeof navigator<`u`&&((navigator.userAgentData?.platform??navigator.platform??navigator.userAgent).toLowerCase().includes(`linux`))?!0:n.opaqueWindows)'
+    assert_contains "$extracted/webview/assets/general-settings-test.js" 'navigator.userAgent.includes(`Linux`)&&x?.opaqueWindows==null&&(x={...x,opaqueWindows:!0})'
     assert_occurrence_count "$extracted/webview/assets/general-settings-test.js" 'navigator.userAgent.includes(`Linux`)' '1'
-    assert_occurrence_count "$extracted/webview/assets/index-test.js" 'dataset.codexOs===`linux`' '1'
-    assert_occurrence_count "$extracted/webview/assets/app-main-test.js" 'dataset.codexOs===`linux`' '1'
-    assert_occurrence_count "$extracted/webview/assets/diff-view-mode-test.js" 'toLowerCase().includes(`linux`)' '1'
     assert_not_contains "$output_log" 'Could not find Linux opaque window default insertion point'
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_occurrence_count "$extracted/webview/assets/general-settings-test.js" 'navigator.userAgent.includes(`Linux`)' '1'
-    assert_occurrence_count "$extracted/webview/assets/index-test.js" 'dataset.codexOs===`linux`' '1'
-    assert_occurrence_count "$extracted/webview/assets/app-main-test.js" 'dataset.codexOs===`linux`' '1'
-    assert_occurrence_count "$extracted/webview/assets/diff-view-mode-test.js" 'toLowerCase().includes(`linux`)' '1'
     assert_not_contains "$output_log" 'Could not find Linux opaque window default insertion point'
 }
 
@@ -5566,7 +5875,7 @@ test_linux_tray_patch_smoke() {
     mkdir -p "$workspace"
     bundle_body="$(cat <<'JS'
 let D={removeMenu(){},setMenuBarVisibility(){},setIcon(){},once(){}};
-let n=require(`electron`),i=require(`node:path`),a=require(`node:fs`);
+const x={o:e=>e};let s=require(`node:url`),n=require(`electron`);n=x.o(n);let l=require(`node:os`);l=x.o(l);let i=require(`node:path`);i=x.o(i);let d=require(`node:util`),q=require(`node:crypto`),a=require(`node:fs`);a=x.o(a);
 let t={join(){},C:{Prod:`prod`},A(){}};
 let k={hide(){},isDestroyed(){return false}};
 let f=`local`;
@@ -5577,13 +5886,13 @@ async function la(e){let t=ua(e);if(t&&(0,a.statSync)(t).isFile()){n.shell.showI
 function ua(e){return e}
 var Ua=Mi({id:`systemDefault`,label:`System Default App`,icon:`apps/file-explorer.png`,kind:`systemDefault`,hidden:!0,darwin:{icon:`apps/finder.png`,detect:()=>`system-default`,iconPath:()=>null,args:e=>[e],open:async({path:e})=>Wa(e)},win32:{detect:()=>`system-default`,iconPath:()=>null,args:e=>[e],open:async({path:e})=>Wa(e)},linux:{detect:()=>`system-default`,iconPath:()=>null,args:e=>[e],open:async({path:e})=>Wa(e)}});
 async function Wa(e){return e}
-function Nw(e,n){return `icon`}
-async function Hw(e){return process.platform!==`win32`&&process.platform!==`darwin`?null:(zw=!0,Lw??Rw??(Rw=(async()=>{let r=await Ww(e.buildFlavor,e.repoRoot),i=new n.Tray(r.defaultIcon);return i})()))}
-async function Ww(e,t){if(process.platform===`darwin`){return null}let r=process.platform===`win32`?`.ico`:`.png`,a=Nw(e,process.platform),o=[...n.app.isPackaged?[(0,i.join)(process.resourcesPath,`${a}${r}`)]:[],(0,i.join)(t,`electron`,`src`,`icons`,`${a}${r}`)];for(let e of o){let t=n.nativeImage.createFromPath(e);if(!t.isEmpty())return{defaultIcon:t,chronicleRunningIcon:null}}return{defaultIcon:await n.app.getFileIcon(process.execPath,{size:process.platform===`win32`?`small`:`normal`}),chronicleRunningIcon:null}}
+async function Hw(e){return process.platform!==`win32`&&process.platform!==`darwin`?null:(zw=!0,Lw??Rw??(Rw=(async()=>{let r=await Ww(e.buildFlavor,e.appBrand,e.repoRoot),i=new n.Tray(r.defaultIcon);return i})()))}
+async function Ww(e,t,i){if(process.platform===`darwin`){return null}let r=K9(e,t,i);return r==null?{defaultIcon:await n.app.getFileIcon(process.execPath,{size:`small`}),chronicleRunningIcon:null}:{defaultIcon:r,chronicleRunningIcon:null}}
+function K9(e,t,r){let a=[(0,i.join)(r,`electron`,`src`,`icons`,`tray.png`)];for(let e of a){let t=n.nativeImage.createFromPath(e);if(!t.isEmpty())return t}return null}
 var pb=class{trayMenuThreads={runningThreads:[],unreadThreads:[],pinnedThreads:[],recentThreads:[],usageLimits:[]};constructor(){this.tray={on(){},setContextMenu(){},popUpContextMenu(){}};this.onTrayButtonClick=()=>{};this.tray.on(`click`,()=>{this.onTrayButtonClick()}),this.tray.on(`right-click`,()=>{this.openNativeTrayMenu()})}async handleMessage(e){switch(e.type){case`tray-menu-threads-changed`:this.trayMenuThreads=e.trayMenuThreads;return}}openNativeTrayMenu(){this.updateChronicleTrayIcon();let e=n.Menu.buildFromTemplate(this.getNativeTrayMenuItems());e.once(`menu-will-show`,()=>{this.isNativeTrayMenuOpen=!0}),e.once(`menu-will-close`,()=>{this.isNativeTrayMenuOpen=!1,this.handleNativeTrayMenuClosed()}),this.tray.popUpContextMenu(e)}updateChronicleTrayIcon(){}getNativeTrayMenuItems(){return[]}}
-v&&k.on(`close`,e=>{this.persistPrimaryWindowBounds(k,f);let t=this.getPrimaryWindows(f).some(e=>e!==k);if(process.platform===`win32`&&!this.isAppQuitting&&this.options.canHideLastLocalWindowToTray?.()===!0&&!t){e.preventDefault(),k.hide();return}if(process.platform===`darwin`&&!this.isAppQuitting&&!t){e.preventDefault(),k.hide()}});
+v&&k.on(`close`,e=>{this.persistPrimaryWindowBounds(k);let t=this.getPrimaryWindows().some(e=>e!==k);if(process.platform===`win32`&&!this.isAppQuitting&&this.options.canHideLastWindowToTray?.()===!0&&!t){e.preventDefault(),k.hide();return}if(process.platform===`darwin`&&!this.isAppQuitting&&!t){e.preventDefault(),k.hide()}});
 let E=process.platform===`win32`;
-let oe=async()=>{};
+let oe=async()=>{O=!0;try{await Hw({appBrand:a.U(),buildFlavor:b,repoRoot:j.repoRoot})}catch(e){O=!1}};
 let se=async e=>{};
 E&&oe();let ce=Hr({});
 JS
@@ -5619,7 +5928,7 @@ function registerCloseHandler({ quitInProgress = false, isAppQuitting = false, t
   const state = { hideCalls: 0 };
   const controller = {
     isAppQuitting,
-    options: { canHideLastLocalWindowToTray: () => trayEnabled },
+    options: { canHideLastWindowToTray: () => trayEnabled },
     persistPrimaryWindowBounds() {},
     getPrimaryWindows() {
       return [];
@@ -5646,7 +5955,7 @@ function runCloseWithoutHelper({ trayEnabled = true, isAppQuitting = false } = {
   const state = { hideCalls: 0 };
   const controller = {
     isAppQuitting,
-    options: { canHideLastLocalWindowToTray: () => trayEnabled },
+    options: { canHideLastWindowToTray: () => trayEnabled },
     persistPrimaryWindowBounds() {},
     getPrimaryWindows() {
       return [];
@@ -5722,7 +6031,7 @@ test_linux_explicit_quit_patch_smoke() {
 
     mkdir -p "$workspace"
     bundle_body="$(cat <<'JS'
-let n=require(`electron`),i=require(`node:path`),a=require(`node:fs`);
+const x={o:e=>e};let s=require(`node:url`),n=require(`electron`);n=x.o(n);let l=require(`node:os`);l=x.o(l);let i=require(`node:path`);i=x.o(i);let d=require(`node:util`),q=require(`node:crypto`),a=require(`node:fs`);a=x.o(a);
 var pb=class{getNativeTrayMenuItems(){return[{label:rB(this.appName),click:()=>{n.app.quit()}}]}};
 function qB(r,o){if(o.type===`quit-app`){n.app.quit();return}return o}
 n.app.on(`before-quit`,o=>{let s=BI(),c=t.sr().some(e=>e.status===`ACTIVE`);if(e||i.canQuitWithoutPrompt()||r||!s&&!c){g=!0,a.markAppQuitting();return}let l=n.app.getName();if(n.dialog.showMessageBoxSync({type:`warning`,buttons:[`Quit`,`Cancel`],defaultId:0,cancelId:1,noLink:!0,title:`Quit ${l}?`,message:`Quit ${l}?`,detail:vB({hasInProgressLocalConversation:s,hasEnabledAutomations:c})})!==0){o.preventDefault();return}i.markQuitApproved(),g=!0,a.markAppQuitting()});
@@ -5862,7 +6171,7 @@ JS
 import{t as d}from"./jsx-runtime-test.js";var c={"general-settings":{id:`settings.nav.general-settings`,defaultMessage:`General`,description:`Title for general settings section`},"keyboard-shortcuts":{id:`settings.nav.keyboard-shortcuts`,defaultMessage:`Keyboard shortcuts`,description:`Title for keyboard shortcuts settings section`}};function m(e){let t=(0,u.c)(17),{slug:r}=e;switch(r){case`keyboard-shortcuts`:{let e;return t[1]===Symbol.for(`react.memo_cache_sentinel`)?(e=(0,d.jsx)(n,{id:`settings.section.keyboard-shortcuts`,defaultMessage:`Keyboard shortcuts`,description:`Title for keyboard shortcuts settings section`}),t[1]=e):e=t[1],e}case`general-settings`:{let e;return t[2]===Symbol.for(`react.memo_cache_sentinel`)?(e=(0,d.jsx)(n,{id:`settings.section.general-settings`,defaultMessage:`General`,description:`Title for general settings section`}),t[2]=e):e=t[2],e}}}
 JS
     cat > "$extracted/webview/assets/index-test.js" <<'JS'
-var Xge={"general-settings":xh,"keyboard-shortcuts":ks,appearance:Pf,agent:gU},H7={},Zge=[`general-settings`,`profile`,`keyboard-shortcuts`,`appearance`,`agent`,`personalization`,`mcp-settings`,`connections`,`git-settings`,`local-environments`,`worktrees`,`browser-use`,`computer-use`,`data-controls`],Qge=[{key:`app`,heading:H7.appHeading,slugs:[`general-settings`,`profile`,`keyboard-shortcuts`,`appearance`,`connections`,`git-settings`,`usage`]}];function n_e(){let l=`electron`,e=e=>{switch(e.slug){case`appearance`:case`git-settings`:case`worktrees`:case`local-environments`:case`data-controls`:case`environments`:return l===`electron`;case`account`:case`general-settings`:case`agent`:case`personalization`:case`keyboard-shortcuts`:case`mcp-settings`:return!0}};if(O)bb0:switch(D.slug){case`usage`:k=g;break bb0;case`appearance`:case`general-settings`:case`agent`:case`git-settings`:case`account`:case`data-controls`:case`personalization`:case`keyboard-shortcuts`:k=!1;break bb0;}}function s_e(e){let{slug:n}=e,r=c_e[n];return (0,$.jsx)(r,{})}var c_e={"general-settings":(0,Z.lazy)(()=>s(()=>import(`./general-settings-DZbwMmWz.js`).then(e=>({default:e.GeneralSettings})),__vite__mapDeps([4]),import.meta.url)),"keyboard-shortcuts":(0,Z.lazy)(()=>s(()=>import(`./keyboard-shortcuts-settings-test.js`),[],import.meta.url)),appearance:(0,Z.lazy)(()=>s(()=>import(`./appearance-settings-D4xYjo5o.js`).then(e=>({default:e.AppearanceSettings})),__vite__mapDeps([56]),import.meta.url)),agent:(0,Z.lazy)(()=>Promise.resolve({default:l_e}))};
+var Xge={"general-settings":xh,"keyboard-shortcuts":ks,appearance:Pf,agent:gU},H7={},Zge=[`general-settings`,`profile`,`keyboard-shortcuts`,`appearance`,`agent`,`personalization`,`mcp-settings`,`connections`,`git-settings`,`local-environments`,`worktrees`,`browser-use`,`computer-use`,`data-controls`],Qge=[{key:`app`,heading:H7.appHeading,slugs:[`general-settings`,`profile`,`keyboard-shortcuts`,`appearance`,`connections`,`git-settings`,`usage`]}];function n_e(){let e=e=>{switch(e.slug){case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:return!0}};if(O)bb0:switch(D.slug){case`usage`:k=g;break bb0;case`appearance`:case`general-settings`:case`agent`:case`git-settings`:case`account`:case`data-controls`:case`personalization`:k=!1;break bb0;case`keyboard-shortcuts`:k=!1;break bb0;}}function s_e(e){let{slug:n}=e,r=c_e[n];return (0,$.jsx)(r,{})}var c_e={"general-settings":Z(async()=>(await s(async()=>{let{GeneralSettings:e}=await import(`./general-settings-DZbwMmWz.js`);return{GeneralSettings:e}},[],import.meta.url)).GeneralSettings),"keyboard-shortcuts":Z(async()=>(await s(async()=>{let{KeyboardShortcutsSettings:e}=await import(`./keyboard-shortcuts-settings-test.js`);return{KeyboardShortcutsSettings:e}},[],import.meta.url)).KeyboardShortcutsSettings)};
 JS
     cat > "$extracted/webview/assets/keyboard-shortcuts-settings-test.js" <<'JS'
 slug:`keyboard-shortcuts`;export default function KeyboardShortcutsSettings(){}
@@ -5890,7 +6199,7 @@ JS
     assert_contains "$extracted/webview/assets/index-test.js" '"linux-desktop":'
     assert_contains "$extracted/webview/assets/index-test.js" 'Zge=\[`general-settings`,`linux-desktop`'
     assert_contains "$extracted/webview/assets/index-test.js" 'slugs:\[`general-settings`,`linux-desktop`'
-    assert_contains "$extracted/webview/assets/index-test.js" 'case`linux-desktop`:return l===`electron`'
+    assert_contains "$extracted/webview/assets/index-test.js" 'case`linux-desktop`:case`general-settings`'
     assert_not_contains "$extracted/webview/assets/index-test.js" "keybinds-settings-linux.js"
     assert_not_contains "$extracted/webview/assets/index-test.js" "codexLinuxKeybindOverridesRuntime"
 
@@ -5925,7 +6234,6 @@ JS
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_contains "$output_log" "WARN: Keybinds settings patch skipped"
-    assert_contains "$output_log" "could not add Linux desktop visibility"
     [ ! -f "$extracted/webview/assets/linux-desktop-settings-linux.js" ] || fail "Linux desktop settings asset should not be written when route bundle is missing"
     [ ! -f "$extracted/webview/assets/linux-settings-row-linux.js" ] || fail "Fallback row asset should not be written when route bundle is missing"
     [ ! -f "$extracted/webview/assets/linux-settings-section-linux.js" ] || fail "Fallback section asset should not be written when route bundle is missing"
@@ -5967,10 +6275,10 @@ test_linux_single_instance_patch_smoke() {
     mkdir -p "$workspace"
     bundle_body="$(cat <<'JS'
 let S=globalThis.__codexSmoke;
-let n={app:{whenReady(){return Promise.resolve()},quit(){S.quitCount++},requestSingleInstanceLock(){S.lockCount++;return true},on(e,t){S.appHandlers[e]=t},off(e,t){S.offHandlers[e]=t}}};
+let n=require(`electron`);
 let t={Er(){return {info(){}}},jn:class{add(e){S.disposables.push(e)}},y(){return{setSecondInstanceArgsHandler:e=>{S.initialHandler=e}}},g(e){return e},t(e){return Array.isArray(e)&&e.includes(`--open-project`)}};
 let i={default:{dirname(e){S.dirnameCalls.push(e);return `/tmp`}}},o={mkdirSync(...e){S.mkdirSyncCalls.push(e)},rmSync(...e){S.rmSyncCalls.push(e)}},u={default:{createServer(e){S.createServerCalls++;S.socketConnectionHandler=e;return S.socketServer}}};
-async function uT(){let{setSecondInstanceArgsHandler:l}=t.y(),k=new t.jn;k.add(()=>{}),t.Er().info(`Launching app`,{safe:{agentRunId:process.env.CODEX_ELECTRON_AGENT_RUN_ID?.trim()||null}});let A=Date.now();await n.app.whenReady();let w=(...e)=>{S.traceCalls.push(e)},M={globalState:S.globalState,repoRoot:`/tmp/codex-smoke`},z=`local`,R={deepLinks:{queueProcessArgs(e){S.queueArgs.push(e);return Array.isArray(e)&&e.some(e=>{let t=String(e);return t.startsWith(`codex://`)||t.startsWith(`codex-browser-sidebar://`)})},flushPendingDeepLinks(){S.flushPendingDeepLinksCalls++;return Promise.resolve()}},navigateToRoute(e,t){S.navigateCalls.push({windowId:e.id,path:t})}},P={windowManager:{sendMessageToWindow(e,t){S.messages.push({windowId:e.id,message:t})}},hotkeyWindowLifecycleManager:{hide(){S.hideCalls++},show(){S.showCalls++;return S.hotkeyWindowShowResult},ensureHotkeyWindowController(){S.ensureHotkeyWindowControllerCalls++;return S.hotkeyWindowController}},getPrimaryWindow(){return S.primaryWindow},createFreshLocalWindow(e){S.createFreshLocalWindowCalls.push(e);return S.createdWindow},ensureHostWindow(e){S.ensureHostWindowCalls.push(e);return S.primaryWindow??S.createdWindow}},g={reportNonFatal(e,t){S.errors.push({error:String(e),meta:t})}},re=e=>{S.focusCalls.push(e.id);e.isMinimized()&&e.restore(),e.show(),e.focus()},ie=async()=>{S.ieCalls++;try{P.hotkeyWindowLifecycleManager.hide();let e=P.getPrimaryWindow()??await P.createFreshLocalWindow(`/`);if(e==null)return;re(e)}catch(e){g.reportNonFatal(e instanceof Error?e:`Failed to open window on second instance`,{kind:`second-instance-open-window-failed`})}};l(e=>{let n=t.t(t.g(e));if(R.deepLinks.queueProcessArgs(e)){n&&ie();return}if(n){ie();return}ie()});let ae=async(e,t)=>{P.hotkeyWindowLifecycleManager.hide();let n=P.getPrimaryWindow(),r=n??await P.createFreshLocalWindow(e);r!=null&&(n!=null&&t.navigateExistingWindow&&R.navigateToRoute(r,e),re(r))},oe=async()=>{S.trayStartupCalls++};let E=process.platform===`win32`;E&&oe();let me=await P.ensureHostWindow(z);me&&re(me),w(`local window ensured`,A,{hostId:z,localWindowVisible:me?.isVisible()??!1}),A=Date.now(),await R.deepLinks.flushPendingDeepLinks()}
+async function uT(){let{setSecondInstanceArgsHandler:l}=t.y(),k=new t.jn;k.add(()=>{}),t.Er().info(`Launching app`,{safe:{agentRunId:process.env.CODEX_ELECTRON_AGENT_RUN_ID?.trim()||null}});let A=Date.now();await n.app.whenReady();let w=(...e)=>{S.traceCalls.push(e)},M={globalState:S.globalState,repoRoot:`/tmp/codex-smoke`},z=`local`,R={deepLinks:{queueProcessArgs(e){S.queueArgs.push(e);return Array.isArray(e)&&e.some(e=>{let t=String(e);return t.startsWith(`codex://`)||t.startsWith(`codex-browser-sidebar://`)})},flushPendingDeepLinks(){S.flushPendingDeepLinksCalls++;return Promise.resolve()}},navigateToRoute(e,t){S.navigateCalls.push({windowId:e.id,path:t})}},P={windowManager:{sendMessageToWindow(e,t){S.messages.push({windowId:e.id,message:t})}},hotkeyWindowLifecycleManager:{hide(){S.hideCalls++},show(){S.showCalls++;return S.hotkeyWindowShowResult},ensureHotkeyWindowController(){S.ensureHotkeyWindowControllerCalls++;return S.hotkeyWindowController}},getPrimaryWindow(){return S.primaryWindow},createFreshLocalWindow(e){S.createFreshLocalWindowCalls.push(e);return S.createdWindow},ensureHostWindow(e){S.ensureHostWindowCalls.push(e);return S.primaryWindow??S.createdWindow}},g={reportNonFatal(e,t){S.errors.push({error:String(e),meta:t})}},re=e=>{S.focusCalls.push(e.id);e.isMinimized()&&e.restore(),e.show(),e.focus()},ie=async()=>{S.ieCalls++;try{P.hotkeyWindowLifecycleManager.hide();let e=P.getPrimaryWindow()??await P.createFreshLocalWindow(`/`);if(e==null)return;re(e)}catch(e){g.reportNonFatal(e instanceof Error?e:`Failed to open window on second instance`,{kind:`second-instance-open-window-failed`})}};l(e=>{let n=t.t(t.g(e));if(R.deepLinks.queueProcessArgs(e)){n&&ie();return}if(n){ie();return}ie()});let ae=async(e,t)=>{P.hotkeyWindowLifecycleManager.hide();let n=P.getPrimaryWindow(),r=n??await P.createFreshLocalWindow(e);r!=null&&(n!=null&&t.navigateExistingWindow&&R.navigateToRoute(r,e),re(r))};async function ore(e){return new n.Tray(e)}let oe=async()=>{N=!0;try{await ore({appBrand:`codex`,buildFlavor:`prod`,repoRoot:M.repoRoot}),S.trayStartupCalls++}catch(e){N=!1}};let E=process.platform===`win32`;E&&oe();let me=await P.ensureHostWindow(z);me&&re(me),w(`local window ensured`,A,{hostId:z,localWindowVisible:me?.isVisible()??!1}),A=Date.now(),await R.deepLinks.flushPendingDeepLinks()}
 JS
 )"
     make_fake_extracted_asar "$extracted" "$bundle_body"
@@ -6185,6 +6493,29 @@ async function boot(settings = {}, env = { CODEX_DESKTOP_LAUNCH_ACTION_SOCKET: "
     console,
     process: { platform: "linux", env },
     require(moduleName) {
+      if (moduleName === "electron") {
+        return {
+          app: {
+            whenReady() {
+              return Promise.resolve();
+            },
+            quit() {
+              state.quitCount++;
+            },
+            requestSingleInstanceLock() {
+              state.lockCount++;
+              return true;
+            },
+            on(event, handler) {
+              state.appHandlers[event] = handler;
+            },
+            off(event, handler) {
+              state.offHandlers[event] = handler;
+            },
+          },
+          Tray: class {},
+        };
+      }
       if (moduleName === "node:path") {
         return {
           dirname(path) {
@@ -7423,7 +7754,12 @@ EOF
 
 main() {
     test_common_helper_sourcing
+    test_package_icon_source_resolution
     test_extract_webview_replaces_linux_icon_assets
+    test_installer_prefers_compact_upstream_chatgpt_icon
+    test_user_local_icon_prefers_generated_app_icon
+    test_extract_webview_requires_entrypoint
+    test_package_layout_requires_webview_entrypoint
     test_package_payload_permission_normalization
     test_deb_builder_smoke
     test_deb_builder_rebuilds_deleted_updater_source
@@ -7497,6 +7833,8 @@ main() {
     test_chrome_browser_client_profile_root_variants
     test_chrome_marketplace_fallback_synthesis
     test_chrome_native_host_manifest_writer
+    test_launcher_managed_node_handles_unset_path
+    test_launcher_rejects_missing_webview_entrypoint
     test_launcher_template_sanity
     test_launcher_cli_resolution_policy
     test_webview_server_cache_policy

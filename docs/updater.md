@@ -102,7 +102,7 @@ that look like this wrapper repository or packaged update-builder.
 ## Rollback
 
 If a rebuilt update installs but the previous retained package was better,
-close Codex Desktop and run:
+close ChatGPT Desktop and run:
 
 ```bash
 codex-update-manager rollback
@@ -155,7 +155,7 @@ Desktop usable, disable the user service:
 systemctl --user disable --now codex-update-manager.service
 ```
 
-Launching Codex Desktop and upgrading the package will not re-enable a disabled
+Launching ChatGPT Desktop and upgrading the package will not re-enable a disabled
 updater service. Re-enable updater behavior explicitly when you want automatic
 checks again:
 
