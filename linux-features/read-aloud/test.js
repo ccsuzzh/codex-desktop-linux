@@ -89,6 +89,27 @@ function settlePromises() {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+function createDeferredSettingsWrites({ writeKey, enabled = false, speed = 1.05 }) {
+  const writes = [];
+  const settings = createLinuxReadAloudSettings((method, { params }) => {
+    if (method === "get-global-state") {
+      assert.ok([
+        "codex-linux-read-aloud-enabled",
+        "codex-linux-read-aloud-kokoro-speed",
+      ].includes(params.key));
+      return Promise.resolve({
+        value: params.key === "codex-linux-read-aloud-enabled" ? enabled : speed,
+      });
+    }
+    assert.equal(method, "set-global-state");
+    assert.equal(params.key, writeKey);
+    const request = deferred();
+    writes.push(request);
+    return request.promise;
+  });
+  return { settings, writes };
+}
+
 test("main bundle patch adds a Linux read aloud handler", () => {
   const source = [
     "let e=require(`node:child_process`),f=require(`node:fs`),p=require(`node:path`),o=require(`node:os`);",
@@ -1519,18 +1540,10 @@ test("generated Linux desktop read aloud settings preserve successful independen
 });
 
 test("generated Linux desktop read aloud settings ignore superseded speed failures", async () => {
-  const speedWrites = [];
-  const settings = createLinuxReadAloudSettings((method, { params }) => {
-    if (method === "get-global-state") {
-      return Promise.resolve({
-        value: params.key === "codex-linux-read-aloud-enabled" ? true : 1.4,
-      });
-    }
-    assert.equal(method, "set-global-state");
-    assert.equal(params.key, "codex-linux-read-aloud-kokoro-speed");
-    const request = deferred();
-    speedWrites.push(request);
-    return request.promise;
+  const { settings, writes: speedWrites } = createDeferredSettingsWrites({
+    writeKey: "codex-linux-read-aloud-kokoro-speed",
+    enabled: true,
+    speed: 1.4,
   });
 
   settings.componentDidMount();
@@ -1538,10 +1551,13 @@ test("generated Linux desktop read aloud settings ignore superseded speed failur
   settings.updateSpeed({ currentTarget: { value: "1.15" } });
   settings.updateSpeed({ currentTarget: { value: "1.30" } });
   assert.equal(settings.state.speed, 1.3);
-
-  speedWrites[1].resolve();
   await settlePromises();
+  assert.equal(speedWrites.length, 1);
+
   speedWrites[0].reject(new Error("older write failed"));
+  await settlePromises();
+  assert.equal(speedWrites.length, 2);
+  speedWrites[1].resolve();
   await settlePromises();
 
   assert.equal(settings.state.speed, 1.3);
@@ -1550,31 +1566,116 @@ test("generated Linux desktop read aloud settings ignore superseded speed failur
 });
 
 test("generated Linux desktop read aloud settings ignore superseded toggle errors", async () => {
-  const enabledWrites = [];
-  const settings = createLinuxReadAloudSettings((method, { params }) => {
-    if (method === "get-global-state") {
-      return Promise.resolve({
-        value: params.key === "codex-linux-read-aloud-enabled" ? false : 1.05,
-      });
-    }
-    assert.equal(method, "set-global-state");
-    assert.equal(params.key, "codex-linux-read-aloud-enabled");
-    const request = deferred();
-    enabledWrites.push(request);
-    return request.promise;
+  const { settings, writes: enabledWrites } = createDeferredSettingsWrites({
+    writeKey: "codex-linux-read-aloud-enabled",
   });
 
   settings.componentDidMount();
   await settlePromises();
   settings.updateEnabled(true);
   settings.updateEnabled(false);
-  enabledWrites[1].resolve();
   await settlePromises();
+  assert.equal(enabledWrites.length, 1);
   enabledWrites[0].reject(new Error("older toggle failed"));
+  await settlePromises();
+  assert.equal(enabledWrites.length, 2);
+  enabledWrites[1].resolve();
   await settlePromises();
 
   assert.equal(settings.state.enabled, false);
   assert.equal(settings.state.error, null);
+  settings.componentWillUnmount();
+});
+
+test("generated Linux desktop read aloud settings roll consecutive toggle failures back to confirmed state", async () => {
+  const { settings, writes: enabledWrites } = createDeferredSettingsWrites({
+    writeKey: "codex-linux-read-aloud-enabled",
+  });
+
+  settings.componentDidMount();
+  await settlePromises();
+  settings.updateEnabled(true);
+  settings.updateEnabled(false);
+  assert.equal(settings.state.enabled, false);
+  await settlePromises();
+  assert.equal(enabledWrites.length, 1);
+
+  enabledWrites[0].reject(new Error("first toggle failed"));
+  await settlePromises();
+  assert.equal(enabledWrites.length, 2);
+  enabledWrites[1].reject(new Error("second toggle failed"));
+  await settlePromises();
+
+  assert.equal(settings.state.enabled, false);
+  assert.equal(settings.state.error, "second toggle failed");
+  settings.componentWillUnmount();
+});
+
+test("generated Linux desktop read aloud settings roll consecutive speed failures back to confirmed state", async () => {
+  const { settings, writes: speedWrites } = createDeferredSettingsWrites({
+    writeKey: "codex-linux-read-aloud-kokoro-speed",
+    enabled: true,
+  });
+
+  settings.componentDidMount();
+  await settlePromises();
+  settings.updateSpeed({ currentTarget: { value: "1.15" } });
+  settings.updateSpeed({ currentTarget: { value: "1.30" } });
+  assert.equal(settings.state.speed, 1.3);
+  await settlePromises();
+  assert.equal(speedWrites.length, 1);
+
+  speedWrites[0].reject(new Error("first speed write failed"));
+  await settlePromises();
+  assert.equal(speedWrites.length, 2);
+  speedWrites[1].reject(new Error("second speed write failed"));
+  await settlePromises();
+
+  assert.equal(settings.state.speed, 1.05);
+  assert.equal(settings.state.error, "second speed write failed");
+  settings.componentWillUnmount();
+});
+
+test("generated Linux desktop read aloud settings roll a toggle failure back to the last successful write", async () => {
+  const { settings, writes: enabledWrites } = createDeferredSettingsWrites({
+    writeKey: "codex-linux-read-aloud-enabled",
+  });
+
+  settings.componentDidMount();
+  await settlePromises();
+  settings.updateEnabled(true);
+  settings.updateEnabled(false);
+  await settlePromises();
+
+  enabledWrites[0].resolve();
+  await settlePromises();
+  enabledWrites[1].reject(new Error("latest toggle failed"));
+  await settlePromises();
+
+  assert.equal(settings.state.enabled, true);
+  assert.equal(settings.state.error, "latest toggle failed");
+  settings.componentWillUnmount();
+});
+
+test("generated Linux desktop read aloud settings roll a speed failure back to the last successful write", async () => {
+  const { settings, writes: speedWrites } = createDeferredSettingsWrites({
+    writeKey: "codex-linux-read-aloud-kokoro-speed",
+    enabled: true,
+  });
+
+  settings.componentDidMount();
+  await settlePromises();
+  settings.updateSpeed({ currentTarget: { value: "1.15" } });
+  settings.updateSpeed({ currentTarget: { value: "1.30" } });
+  await settlePromises();
+
+  speedWrites[0].resolve();
+  await settlePromises();
+  speedWrites[1].reject(new Error("latest speed write failed"));
+  await settlePromises();
+
+  assert.equal(settings.state.speed, 1.15);
+  assert.equal(settings.state.error, "latest speed write failed");
   settings.componentWillUnmount();
 });
 
