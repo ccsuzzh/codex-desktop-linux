@@ -52,6 +52,7 @@ function codexLinuxCreateActionNotification(options, fallbackFactory, runtime) {
   let mode = "idle";
   let shown = false;
   let closed = false;
+  let closeRequested = false;
   let stderr = "";
 
   const callHandler = (event, ...args) => {
@@ -158,16 +159,18 @@ function codexLinuxCreateActionNotification(options, fallbackFactory, runtime) {
       handlers.set(event, handler);
     },
     close: () => {
-      if (closed) return;
+      if (closed || closeRequested) return;
       if (mode === "fallback") {
         fallback?.close();
         closed = true;
         return;
       }
-      closed = true;
+      closeRequested = true;
       try {
         child?.stdin?.end("close\n");
-      } catch {}
+      } catch {
+        emitClose();
+      }
     },
   };
 }

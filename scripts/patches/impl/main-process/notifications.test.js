@@ -136,3 +136,30 @@ test("action notification falls back before the bridge is shown", () => {
 
   assert.deepEqual(fallbackEvents, ["on:click", "on:close", "show"]);
 });
+
+test("programmatic close waits for the bridge close event and forwards it once", () => {
+  const child = fakeBridgeProcess();
+  let closeCount = 0;
+  const notification = codexLinuxCreateActionNotification(
+    { title: "Approval", body: "Required", actions: [{ text: "Approve" }] },
+    () => null,
+    { bridgePath: "/test/bridge", spawn: () => child },
+  );
+  notification.on("close", () => {
+    closeCount += 1;
+  });
+  notification.show();
+  child.stdout.emit("data", Buffer.from('{"event":"shown","notification_id":42}\n'));
+
+  notification.close();
+  notification.close();
+
+  assert.equal(child.stdin.ended, true);
+  assert.equal(child.stdin.writes.at(-1), "close\n");
+  assert.equal(closeCount, 0);
+
+  child.stdout.emit("data", Buffer.from('{"event":"closed"}\n'));
+  child.stdout.emit("data", Buffer.from('{"event":"closed"}\n'));
+
+  assert.equal(closeCount, 1);
+});
