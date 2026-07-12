@@ -129,11 +129,10 @@ function codexLinuxCreateActionNotification(options, fallbackFactory, runtime) {
         return;
       }
       codexLinuxNotificationActionLines(child.stdout, handleLine);
-      child.stdin?.on?.("error", () => {
-        if (mode !== "bridge" || closed) return;
-        if (!shown) startFallback();
-        else emitClose();
-      });
+      // An EPIPE can arrive before the child stdout stream is fully drained.
+      // Keep the listener to avoid an unhandled stream error, but let the
+      // ChildProcess "close" event make the lifecycle decision after stdio closes.
+      child.stdin?.on?.("error", () => {});
       child.stderr?.on("data", (chunk) => {
         stderr = (stderr + chunk.toString("utf8")).slice(-4096);
       });
@@ -141,7 +140,7 @@ function codexLinuxCreateActionNotification(options, fallbackFactory, runtime) {
         if (!shown) startFallback();
         else emitClose();
       });
-      child.once("exit", (code) => {
+      child.once("close", (code) => {
         if (mode !== "bridge" || closed) return;
         if (!shown) {
           if (stderr.trim()) {

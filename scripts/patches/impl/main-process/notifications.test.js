@@ -227,3 +227,38 @@ test("close while the bridge starts prevents a later fallback", () => {
   assert.equal(actionCount, 0);
   assert.equal(closeCount, 1);
 });
+
+test("process exit waits for buffered stdout before deciding fallback", () => {
+  const child = fakeBridgeProcess();
+  const actions = [];
+  let closeCount = 0;
+  let fallbackCount = 0;
+  const notification = codexLinuxCreateActionNotification(
+    { title: "Approval", body: "Required", actions: [{ text: "Approve" }] },
+    () => {
+      fallbackCount += 1;
+      return null;
+    },
+    { bridgePath: "/test/bridge", spawn: () => child },
+  );
+  notification.on("action", (_event, index) => actions.push(index));
+  notification.on("close", () => {
+    closeCount += 1;
+  });
+  notification.show();
+
+  child.emit("exit", 0);
+  assert.equal(fallbackCount, 0);
+
+  child.stdout.emit(
+    "data",
+    Buffer.from(
+      '{"event":"shown","notification_id":42}\n{"event":"action","index":0}\n{"event":"closed"}\n',
+    ),
+  );
+  child.emit("close", 0);
+
+  assert.deepEqual(actions, [0]);
+  assert.equal(closeCount, 1);
+  assert.equal(fallbackCount, 0);
+});
