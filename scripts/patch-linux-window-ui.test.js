@@ -45,7 +45,9 @@ const {
   applyLinuxDesktopSettingsSectionsPatch,
   applyLinuxDesktopSettingsSharedPatch,
   applyLinuxKeybindOverridesRuntimePatch,
+  applyLinuxBrowserReloadShortcutRuntimePatch,
   patchKeybindsSettingsAssets,
+  patchWebviewReloadShortcutRuntime,
 } = require("./patches/impl/keybinds-settings.js");
 const {
   applyLinuxAvatarOverlayMousePassthroughPatch,
@@ -4783,7 +4785,69 @@ test("adds Linux desktop settings route when upstream owns Keyboard Shortcuts", 
   assert.match(patched, /slugs:\[`general-settings`,`linux-desktop`,`appearance`/);
   assert.match(patched, /case`linux-desktop`:return l===`electron`/);
   assert.match(patched, /case`linux-desktop`:k=!1;break bb0;/);
-  assert.doesNotMatch(patched, /codexLinuxKeybindOverridesRuntime/);
+  assert.match(patched, /codexLinuxBrowserReloadShortcutRuntime/);
+});
+
+test("Linux browser reload shortcut reloads the webview page", () => {
+  const listeners = {};
+  let reloads = 0;
+  const patched = applyPatchTwice(
+    applyLinuxBrowserReloadShortcutRuntimePatch,
+    "var appShell=true;",
+  );
+  const run = (eventInit) => {
+    const event = {
+      altKey: false,
+      code: "",
+      ctrlKey: false,
+      defaultPrevented: false,
+      metaKey: false,
+      repeat: false,
+      shiftKey: false,
+      preventDefault() { this.defaultPrevented = true; },
+      stopImmediatePropagation() { this.stopped = true; },
+      ...eventInit,
+    };
+    listeners.keydown(event);
+    return event;
+  };
+
+  vm.runInNewContext(patched, {
+    window: {
+      addEventListener(type, listener) { listeners[type] = listener; },
+      location: { reload() { reloads += 1; } },
+    },
+  });
+
+  const reloadEvent = run({ code: "KeyR", ctrlKey: true });
+  const hardReloadEvent = run({ code: "KeyR", ctrlKey: true, shiftKey: true });
+  const textEvent = run({ code: "KeyR", ctrlKey: false });
+
+  assert.equal(reloads, 2);
+  assert.equal(reloadEvent.defaultPrevented, true);
+  assert.equal(hardReloadEvent.defaultPrevented, true);
+  assert.equal(textEvent.defaultPrevented, false);
+});
+
+test("webview reload shortcut fallback survives settings-route drift", () => {
+  const extractedDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-webview-reload-fallback-"));
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  try {
+    fs.mkdirSync(assetsDir, { recursive: true });
+    const entryPath = path.join(assetsDir, "index-current.js");
+    fs.writeFileSync(entryPath, "var appShell=true;", "utf8");
+
+    const result = patchKeybindsSettingsAssets(extractedDir);
+    assert.equal(result.matched, true);
+    assert.equal(result.changed, 1);
+    assert.match(result.reason, /webview reload shortcut fallback/);
+    assert.match(fs.readFileSync(entryPath, "utf8"), /__codexLinuxReloadShortcutInstalled/);
+
+    const secondResult = patchWebviewReloadShortcutRuntime(extractedDir);
+    assert.deepEqual(secondResult, { matched: true, changed: 0 });
+  } finally {
+    fs.rmSync(extractedDir, { recursive: true, force: true });
+  }
 });
 
 test("adds physical-key fallback for current native shortcut runtime", () => {
