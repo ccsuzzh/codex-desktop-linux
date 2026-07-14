@@ -2,8 +2,10 @@
 
 const MODEL_PICKER_STATE_ASSET_PATTERN =
   /^app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-[^.]+\.js$/;
+const MODEL_PICKER_ALLOWLIST_ASSET_PATTERN =
+  /^app-initial~app-main~hotkey-window-thread-page~keyboard-shortcuts-settings~thread-app-shell~cf704xib-[^.]+\.js$/;
 const MODEL_PICKER_MENU_ASSET_PATTERN =
-  /^app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~k0ede4gb-[^.]+\.js$/;
+  /^app-initial~app-main~onboarding-page~projects-index-page~hotkey-window-thread-page~quick-ch~iiv1g666-[^.]+\.js$/;
 const SIMPLE_MENU_VIEW_PATTERN =
   /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(`composer-model-picker-menu-view-v1`,`simple`\)/;
 const ADVANCED_MENU_VIEW_PATTERN =
@@ -12,9 +14,12 @@ const MODEL_TITLE_MARKER = "composer.intelligenceDropdown.model.title";
 const MODEL_ROW_MARKER = "composer.intelligenceDropdown.model.rowLabel";
 const EFFORT_TITLE_MARKER = "composer.intelligenceDropdown.effort.title";
 const INLINE_MODEL_LIST_RUNTIME_MARKER = "codex-linux-inline-model-list";
+const DYNAMIC_POWER_EFFORTS_RUNTIME_MARKER =
+  "codex-linux-dynamic-supported-reasoning-efforts";
 const MODEL_ALLOWLIST_MARKER = "l?t.has(n.model):!n.hidden";
 const GPT_56_ALLOWLIST_MARKER =
   "l?t.has(n.model)||n.model.startsWith(`gpt-5.6-`)&&!n.hidden:!n.hidden";
+const JS_IDENT = "[A-Za-z_$][\\w$]*";
 
 function warn(message) {
   console.warn(`WARN: ${message} - skipping ui-tweaks model picker patch`);
@@ -137,9 +142,86 @@ function applyGpt56AllowlistPatch(source, context = {}) {
   }
 }
 
+function findDynamicPowerSelectionsFunction(source) {
+  const pattern = new RegExp(
+    `function (${JS_IDENT})\\((${JS_IDENT})\\)\\{return \\2\\?\\.flatMap\\(\\(\\{` +
+      `displayName:${JS_IDENT},model:${JS_IDENT},supportedReasoningEfforts:${JS_IDENT}` +
+      `\\}\\)=>`,
+  );
+  return source.match(pattern)?.[1] ?? null;
+}
+
+function applyDynamicSupportedReasoningEffortsPatch(source, context = {}) {
+  try {
+    if (typeof source !== "string") {
+      warn("Asset source is not a string");
+      return source;
+    }
+    if (!enabled(context) || source.includes(DYNAMIC_POWER_EFFORTS_RUNTIME_MARKER)) {
+      return source;
+    }
+
+    const dynamicPowerSelectionsFunction = findDynamicPowerSelectionsFunction(source);
+    if (dynamicPowerSelectionsFunction == null) {
+      if (context.warnOnMissingMarkers === true) {
+        warn("Could not find the supported reasoning effort mapper");
+      }
+      return source;
+    }
+
+    const powerSelectionPattern = new RegExp(
+      `function (${JS_IDENT})\\((${JS_IDENT}),(${JS_IDENT})=!1\\)\\{let (${JS_IDENT})=` +
+        `(${JS_IDENT})\\((.+?),\\2\\);if\\(\\4\\.length>=4\\)return \\4;let (${JS_IDENT})=` +
+        `\\5\\((${JS_IDENT}),\\2\\);return \\7\\.length>=4\\?\\7:\\[\\]\\}`,
+    );
+    const match = source.match(powerSelectionPattern);
+    if (match == null) {
+      if (context.warnOnMissingMarkers === true) {
+        warn("Could not find the compact Power selection resolver");
+      }
+      return source;
+    }
+
+    const [
+      original,
+      resolverFunction,
+      modelsVar,
+      includeUltraVar,
+      primarySelectionsVar,
+      supportedSelectionsFilter,
+      primaryCandidates,
+      fallbackSelectionsVar,
+      fallbackCandidates,
+    ] = match;
+    const patched =
+      `function ${resolverFunction}(${modelsVar},${includeUltraVar}=!1){` +
+      `let ${primarySelectionsVar}=${supportedSelectionsFilter}((${primaryCandidates}).filter(` +
+      `${modelsVar}=>${modelsVar}.model!==\`gpt-5.6-sol\`),${modelsVar}),` +
+      `codexLinuxSolModel=${modelsVar}?.find(${modelsVar}=>${modelsVar}.model===\`gpt-5.6-sol\`),` +
+      `codexLinuxSolSelections=codexLinuxSolModel==null?[]:` +
+      `${dynamicPowerSelectionsFunction}([codexLinuxSolModel]).map((${modelsVar},codexLinuxIndex)=>` +
+      `({...${modelsVar},powerSettingIndex:${primarySelectionsVar}.length+codexLinuxIndex})),` +
+      `codexLinuxPowerSelections=[...${primarySelectionsVar},...codexLinuxSolSelections]` +
+      `/*${DYNAMIC_POWER_EFFORTS_RUNTIME_MARKER}*/;` +
+      `if(codexLinuxPowerSelections.length>=4)return codexLinuxPowerSelections;` +
+      `let codexLinuxCuratedSelections=${supportedSelectionsFilter}(${primaryCandidates},${modelsVar});` +
+      `if(codexLinuxCuratedSelections.length>=4)return codexLinuxCuratedSelections;` +
+      `let ${fallbackSelectionsVar}=${supportedSelectionsFilter}(${fallbackCandidates},${modelsVar});` +
+      `return ${fallbackSelectionsVar}.length>=4?${fallbackSelectionsVar}:[]}`;
+
+    return source.replace(original, patched);
+  } catch (error) {
+    warn(`Unexpected error: ${error instanceof Error ? error.message : String(error)}`);
+    return source;
+  }
+}
+
 function applyModelPickerModelListPatch(source, context = {}) {
-  return applyInlineModelListPatch(
-    applyGpt56AllowlistPatch(applyDefaultAdvancedViewPatch(source, context), context),
+  return applyDynamicSupportedReasoningEffortsPatch(
+    applyInlineModelListPatch(
+      applyGpt56AllowlistPatch(applyDefaultAdvancedViewPatch(source, context), context),
+      context,
+    ),
     context,
   );
 }
@@ -161,8 +243,8 @@ const descriptors = [
     phase: "webview-asset",
     order: 20_795,
     ciPolicy: "optional",
-    pattern: MODEL_PICKER_MENU_ASSET_PATTERN,
-    missingDescription: "composer model picker menu bundle",
+    pattern: MODEL_PICKER_ALLOWLIST_ASSET_PATTERN,
+    missingDescription: "composer model picker allowlist bundle",
     skipDescription: "ui-tweaks GPT-5.6 model allowlist patch",
     apply: (source, context = {}) =>
       applyGpt56AllowlistPatch(source, { ...context, warnOnMissingMarkers: true }),
@@ -178,23 +260,41 @@ const descriptors = [
     apply: (source, context = {}) =>
       applyInlineModelListPatch(source, { ...context, warnOnMissingMarkers: true }),
   },
+  {
+    id: "model-picker-dynamic-supported-reasoning-efforts",
+    phase: "webview-asset",
+    order: 20_797,
+    ciPolicy: "optional",
+    pattern: MODEL_PICKER_MENU_ASSET_PATTERN,
+    missingDescription: "composer model picker menu bundle",
+    skipDescription: "ui-tweaks dynamic supported reasoning efforts patch",
+    apply: (source, context = {}) =>
+      applyDynamicSupportedReasoningEffortsPatch(source, {
+        ...context,
+        warnOnMissingMarkers: true,
+      }),
+  },
 ];
 
 module.exports = {
   ADVANCED_MENU_VIEW_PATTERN,
+  DYNAMIC_POWER_EFFORTS_RUNTIME_MARKER,
   EFFORT_TITLE_MARKER,
   GPT_56_ALLOWLIST_MARKER,
   INLINE_MODEL_LIST_RUNTIME_MARKER,
   MODEL_ALLOWLIST_MARKER,
+  MODEL_PICKER_ALLOWLIST_ASSET_PATTERN,
   MODEL_PICKER_MENU_ASSET_PATTERN,
   MODEL_PICKER_STATE_ASSET_PATTERN,
   MODEL_ROW_MARKER,
   MODEL_TITLE_MARKER,
   SIMPLE_MENU_VIEW_PATTERN,
   applyDefaultAdvancedViewPatch,
+  applyDynamicSupportedReasoningEffortsPatch,
   applyGpt56AllowlistPatch,
   applyInlineModelListPatch,
   applyModelPickerModelListPatch,
   descriptors,
+  findDynamicPowerSelectionsFunction,
   findInlineModelListVariable,
 };

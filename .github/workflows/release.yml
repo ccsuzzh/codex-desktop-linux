@@ -60,15 +60,53 @@ jobs:
 
           before_sha="$(git rev-parse HEAD)"
           upstream_sha="$(git rev-parse upstream/main)"
-          workflow_backup="$(mktemp -d)"
-          cp -a .github/workflows "$workflow_backup/workflows"
+          release_workflow_backup="$(mktemp)"
+          cp .github/workflows/release.yml "$release_workflow_backup"
+          trap 'rm -f "$release_workflow_backup"' EXIT
 
+          set +e
           git merge --no-commit --no-ff upstream/main
+          merge_status=$?
+          set -e
 
-          rm -rf .github/workflows
-          mkdir -p .github
-          cp -a "$workflow_backup/workflows" .github/workflows
-          git add -A .github/workflows
+          unmerged_paths="$(git diff --name-only --diff-filter=U)"
+          if [ "$merge_status" -ne 0 ] && [ -z "$unmerged_paths" ]; then
+            echo "::error::Upstream merge failed without resolvable file conflicts"
+            git merge --abort || true
+            exit "$merge_status"
+          fi
+
+          unexpected_conflicts="$(printf '%s\n' "$unmerged_paths" | grep -vE '^\.github/workflows/[^/]+\.ya?ml$' || true)"
+          if [ -n "$unexpected_conflicts" ]; then
+            echo "::error::Upstream merge has conflicts outside .github/workflows"
+            printf '%s\n' "$unexpected_conflicts"
+            git merge --abort
+            exit 1
+          fi
+
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            [ "$path" != ".github/workflows/release.yml" ] || continue
+
+            if git ls-files -u -- "$path" | awk '$3 == 3 { found=1 } END { exit !found }'; then
+              git checkout --theirs -- "$path"
+              git add "$path"
+            else
+              git rm -f -- "$path"
+            fi
+          done <<< "$unmerged_paths"
+
+          mkdir -p .github/workflows
+          cp "$release_workflow_backup" .github/workflows/release.yml
+          git add .github/workflows/release.yml
+
+          remaining_conflicts="$(git diff --name-only --diff-filter=U)"
+          if [ -n "$remaining_conflicts" ]; then
+            echo "::error::Upstream workflow conflicts could not be resolved"
+            printf '%s\n' "$remaining_conflicts"
+            git merge --abort
+            exit 1
+          fi
 
           if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
             git commit --allow-empty -m "Merge upstream main"

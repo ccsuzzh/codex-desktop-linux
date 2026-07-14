@@ -34,7 +34,7 @@ function applyCopilotReasoningEffortSettingsPatch(currentSource) {
 
   const copilotSavePatchMarker = "copilot-default-reasoning-effort`,";
   const copilotAsyncSaveRegex =
-    /if\(await ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)\)return;if\(([A-Za-z_$][\w$]*)\)\{await ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),`copilot-default-model`,\2,\{throwOnFailure:!0\}\);return\}if\(([A-Za-z_$][\w$]*)\.info\(`Setting default model and reasoning effort`,\{safe:\{newModel:\2,newEffort:\3,profile:([A-Za-z_$][\w$]*)\.profile\}\}\),!([A-Za-z_$][\w$]*)\)(throw Error\(`Model settings host is unavailable`\);|return;)/;
+    /if\(await ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)\)return;if\(([A-Za-z_$][\w$]*)\)\{await ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),`copilot-default-model`,\2,\{throwOnFailure:!0\}\);return\}/;
   if (patchedSource.includes(copilotSavePatchMarker)) {
     // Already patched.
   } else if (copilotAsyncSaveRegex.test(patchedSource)) {
@@ -48,12 +48,8 @@ function applyCopilotReasoningEffortSettingsPatch(currentSource) {
         isCopilotVar,
         persistStateVar,
         stateScopeVar,
-        loggerVar,
-        configVar,
-        hostReadyVar,
-        unavailableTail,
       ) =>
-        `if(await ${updateConversationVar}(${modelArgVar},${effortArgVar}))return;if(${isCopilotVar}){await ${persistStateVar}(${stateScopeVar},\`copilot-default-model\`,${modelArgVar},{throwOnFailure:!0});await ${persistStateVar}(${stateScopeVar},\`copilot-default-reasoning-effort\`,${effortArgVar},{throwOnFailure:!0});return}if(${loggerVar}.info(\`Setting default model and reasoning effort\`,{safe:{newModel:${modelArgVar},newEffort:${effortArgVar},profile:${configVar}.profile}}),!${hostReadyVar})${unavailableTail}`,
+        `if(await ${updateConversationVar}(${modelArgVar},${effortArgVar}))return;if(${isCopilotVar}){await ${persistStateVar}(${stateScopeVar},\`copilot-default-model\`,${modelArgVar},{throwOnFailure:!0});await ${persistStateVar}(${stateScopeVar},\`copilot-default-reasoning-effort\`,${effortArgVar},{throwOnFailure:!0});return}`,
     );
   } else if (patchedSource.includes("copilot-default-model")) {
     console.warn(
@@ -154,7 +150,7 @@ module.exports = {
       id: "settings",
       name: "copilot-reasoning-effort-settings",
       phase: "webview-asset",
-      pattern: /^app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~k0ede4gb-[^.]+\.js$/,
+      pattern: /^app-initial~app-main~hotkey-window-thread-page~keyboard-shortcuts-settings~thread-app-shell~cf704xib-[^.]+\.js$/,
       missingDescription: "model settings bundle",
       skipDescription: "Copilot reasoning effort settings patch",
       apply: applyCopilotReasoningEffortSettingsPatch,
@@ -163,8 +159,8 @@ module.exports = {
       id: "model-list",
       name: "copilot-reasoning-effort-model-list",
       phase: "webview-asset",
-      pattern: /^app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~k0ede4gb-[^.]+\.js$/,
-      missingDescription: "font settings bundle",
+      pattern: /^app-initial~app-main~hotkey-window-thread-page~keyboard-shortcuts-settings~thread-app-shell~cf704xib-[^.]+\.js$/,
+      missingDescription: "model list bundle",
       skipDescription: "Copilot reasoning effort model list patch",
       apply: applyCopilotReasoningEffortModelListPatch,
     },
@@ -173,7 +169,7 @@ module.exports = {
       name: "copilot-reasoning-effort-ui",
       phase: "webview-asset",
       pattern: /^app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-[^.]+\.js$/,
-      missingDescription: "webview index bundle",
+      missingDescription: "current composer bundle",
       skipDescription: "Copilot reasoning effort UI patch",
       apply: applyCopilotReasoningEffortUiPatch,
     },

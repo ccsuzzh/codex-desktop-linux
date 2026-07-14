@@ -131,9 +131,9 @@ User data is preserved for reinstall. To remove only this wrapper's local app
 state, logs, launcher flags, and updater state, delete these paths.
 
 If you enabled Remote Mobile Control, `~/.config/codex-desktop` can contain
-`remote-control-device-keys-v1.json`. Revoke paired devices in Codex
-Settings/Connections or ChatGPT before deleting that file or removing the whole
-directory. For feature-owned data, prefer the cleanup flow in
+the private `remote-control-device-keys/` directory. Revoke paired devices in
+Codex Settings/Connections or ChatGPT before deleting it or removing the whole
+`codex-desktop` directory. For feature-owned data, prefer the cleanup flow in
 [Native setup](docs/native-setup.md#feature-cleanup).
 
 ```bash
@@ -165,6 +165,12 @@ order, and logs the resolved CLI path plus best-effort version so GUI PATH
 issues are visible. Set `CODEX_CLI_PATH=/path/to/codex` when you want to pin a
 specific binary.
 
+Local AppImage builds can optionally embed that CLI and its matching Linux
+platform package. Set `CODEX_CLI_BUNDLE_SOURCE` to an installed
+`node_modules/@openai/codex` directory when running `make appimage`; explicit
+`CODEX_CLI_PATH` values still take precedence at runtime. See
+[Build and packaging](docs/build-and-packaging.md#appimage-local-self-build).
+
 X11 and Wayland sessions are supported. The launcher prefers XWayland on
 Wayland when available for better Electron popup positioning, then falls back
 to Electron's automatic Wayland handling. See
@@ -186,6 +192,7 @@ workarounds.
 | GUI install prompts | If installed | Uses `kdialog` / `zenity`, then terminal fallback | [Native setup](docs/native-setup.md) |
 | Linux file manager integration | Always | Built into core Linux patches | [Architecture](docs/architecture.md) |
 | Chrome plugin native host | Always | Installed with bundled plugins | [Architecture](docs/architecture.md) |
+| Portable upstream plugins | When shipped upstream | Sites, Deep Research, and Visualize are staged automatically; upstream rollout still applies | [Architecture](docs/architecture.md#bundled-plugins) |
 | Browser annotations | Always | Built into the patched webview | [Architecture](docs/architecture.md) |
 | Tray and warm-start handoff | Always | Normal app launch | [Architecture](docs/architecture.md) |
 | Multiple app instances | Opt-in | `./codex-app/start.sh --new-instance` | [Build and packaging](docs/build-and-packaging.md#running-the-generated-app) |
@@ -208,10 +215,12 @@ workarounds.
 | Copilot reasoning effort defaults | Opt-in | `copilot-reasoning-effort` | [Docs](linux-features/copilot-reasoning-effort/README.md) |
 | Example Linux Feature | Developer example | `example-feature` | [Docs](linux-features/example-feature/README.md) |
 | Frameless titlebar | Opt-in | `frameless-titlebar` | [Docs](linux-features/frameless-titlebar/README.md) |
+| Global Dictation | Opt-in | `global-dictation` | [Docs](linux-features/global-dictation/README.md) |
 | MCP helper reaper | Opt-in | `mcp-helper-reaper` | [Docs](linux-features/mcp-helper-reaper/README.md) |
 | Browser Use node_repl reaper | Opt-in | `node-repl-reaper` | [Docs](linux-features/node-repl-reaper/README.md) |
 | Open Target Discovery | Opt-in | `open-target-discovery` | [Docs](linux-features/open-target-discovery/README.md) |
 | Persistent status panel | Opt-in | `persistent-status-panel` | [Docs](linux-features/persistent-status-panel/README.md) |
+| Project task Created sorting | Opt-in | `project-task-sort` | [Docs](linux-features/project-task-sort/README.md) |
 | Read Aloud button | Opt-in | `read-aloud` | [Docs](linux-features/read-aloud/README.md) |
 | Read Aloud MCP | Opt-in | `read-aloud-mcp` | [Docs](linux-features/read-aloud-mcp/README.md) |
 | Remote Control UI gates | Opt-in | `remote-control-ui` | [Docs](linux-features/remote-control-ui/README.md) |
@@ -297,6 +306,12 @@ Use a local DMG:
 ```bash
 make build-app DMG=/path/to/Codex.dmg
 ```
+
+Local builds are transactional: the candidate must pass the same
+[upstream DMG acceptance profile](docs/upstream-dmg-acceptance.md) used by the
+scheduled GitHub workflow before it replaces the working `codex-app/`.
+Only configured Linux Features are checked; drift in an enabled feature keeps
+the current app installed until that feature is disabled or repaired.
 
 Build and install a package:
 
