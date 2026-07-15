@@ -989,9 +989,9 @@ fi
         fs::create_dir_all(source_root.join("launcher"))?;
         fs::create_dir_all(source_root.join("packaging/linux"))?;
         fs::create_dir_all(source_root.join("assets"))?;
-        write_fake_computer_use_bundle(&source_root)?;
-        write_fake_linux_features_bundle(&source_root)?;
-        write_fake_patch_bundle(&source_root)?;
+        write_fake_computer_use_bundle(source_root)?;
+        write_fake_linux_features_bundle(source_root)?;
+        write_fake_patch_bundle(source_root)?;
         fs::write(source_root.join("install.sh"), b"#!/bin/bash\n")?;
         fs::write(
             source_root.join("launcher/cli-launch-path.py"),
