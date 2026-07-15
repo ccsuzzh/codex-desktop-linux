@@ -65,9 +65,8 @@ const {
 } = require("./patches/impl/chrome-plugin.js");
 const {
   applyLinuxAboutDialogPatch,
+  applyLinuxAppReloadShortcutsPatch,
   applyLinuxApplicationMenuPatch,
-  applyLinuxBrowserReloadShortcutCapturePatch,
-  applyLinuxBrowserReloadMenuEnablePatch,
   applyLinuxMenuPatch,
   applyLinuxNativeTitlebarPatch,
   applyLinuxOpaqueBackgroundPatch,
@@ -964,8 +963,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-skills-list-dedupe",
     "linux-config-write-version-conflict",
     "linux-application-menu",
-    "linux-browser-reload-shortcut-capture",
-    "linux-browser-reload-menu-enable",
+    "linux-app-reload-shortcuts",
     "linux-x11-project-picker",
     "opaque-window-default-general-settings",
     "opaque-window-default-webview-index",
@@ -2798,53 +2796,27 @@ test("migrates a Linux-suppressed application menu back to the real menu", () =>
   assert.equal(patched, "let et=n.Menu.buildFromTemplate($e);n.Menu.setApplicationMenu(et);");
 });
 
-test("captures remapped browser reload shortcuts through the native keymap", () => {
-  const source = "var persisted={reloadBrowserPage:[`Ctrl+Alt+Y`],hardReloadBrowserPage:[`Ctrl+Shift+F5`]},commands={qt:()=>persisted,Qt:({commandId,keymapState})=>keymapState[commandId]??[],Gt:({commandId})=>({reloadBrowserPage:[`Ctrl+R`],hardReloadBrowserPage:[`Ctrl+Shift+R`]})[commandId]??[]};var tabCommands=[`nextTab`,`previousTab`],ownerCommands=[`nextRecentThread`,`nextThread`,`openBrowserTab`,`previousRecentThread`,`previousThread`];function ownerAccelerators(){let isMac=process.platform===`darwin`,get=commandId=>commands.Gt({commandId:commandId,isMacOS:isMac});return{closeTab:get(`closeTab`),nextTab:get(`nextTab`),nextRecentThread:get(`nextRecentThread`),nextThread:get(`nextThread`),openBrowserTab:get(`openBrowserTab`),previousTab:get(`previousTab`),previousRecentThread:get(`previousRecentThread`),previousThread:get(`previousThread`)}}function install({getOwnerCommandAccelerators:a,owner:s,runCommandInOwner:c,setInteractionMode:l}){let u=resolve(a);return(d,f)=>{let p=u(f);if(p!=null){if(d.preventDefault(),s.focus(),p.allowAppShellTabShortcut){c(p.commandId,toKeyboardEvent(f),{allowAppShellTabShortcut:!0});return}c(p.commandId,toKeyboardEvent(f));return}}}function resolve(e){return t=>{if(t.type!==`keyDown`)return null;let n=toKeyboardEvent(t),r=find(t,n,e,tabCommands),i=find(t,n,e,ownerCommands);return r!=null&&i!=null?{allowAppShellTabShortcut:!0,commandId:i}:r==null?i==null?null:{commandId:i}:{commandId:r}}}function find(e,t,r,i){for(let a of i)for(let i of r(a)){if(i.includes(` `)||!matches(t,i))continue;return e.isAutoRepeat?null:a}return null}function toKeyboardEvent(e){return e}function matches(e,t){return e.accelerator===t}function wire(e,t,r){let me=install({getOwnerCommandAccelerators:n=>e.getOwnerCommandAccelerators(n),owner:t.owner,runCommandInOwner:(n,i,a)=>{e.runCommandInOwner(n,i,a)},setInteractionMode:(n,i)=>{e.setInteractionMode(t.owner,r.conversationId,n,r.browserTabId,i)}}),he=0;return me}this.wire=wire;this.ownerAccelerators=ownerAccelerators;";
-  const patched = applyPatchTwice(applyLinuxBrowserReloadShortcutCapturePatch, source);
-  const runCommands = [];
+test("routes persisted native reload shortcuts to the Linux app webview", async () => {
+  const source = "let focusedWindow=BrowserWindow.getFocusedWindow(),focusedWebContents=webContents.getFocusedWebContents(),reloadEnabled=focusedWindow!=null&&!focusedWindow.isDestroyed()&&!!getBrowserSidebarManager(focusedWindow)?.canReloadActiveVisiblePage(focusedWindow,focusedWebContents),runReload=async(force=!1)=>{let target=await getWindow();if(!target)return;let manager=getBrowserSidebarManager(target);if(manager==null)return;let focused=webContents.getFocusedWebContents();if(force){manager.reloadActiveVisiblePageWithOptions(target,{ignoreCache:!0},focused);return}manager.reloadActiveVisiblePage(target,focused)},reload={enabled:reloadEnabled};this.runReload=runReload;";
+  const patched = applyPatchTwice(applyLinuxAppReloadShortcutsPatch, source);
   const reloads = [];
-  const context = { process: { platform: "linux" } };
+  const context = {
+    BrowserWindow: { getFocusedWindow() { return null; } },
+    getBrowserSidebarManager() { throw new Error("Linux app reload must not use Browser Sidebar"); },
+    getWindow: async () => ({
+      reload() { reloads.push("reload"); },
+      webContents: { reloadIgnoringCache() { reloads.push("hard-reload"); } },
+    }),
+    process: { platform: "linux" },
+    webContents: { getFocusedWebContents() { return null; } },
+  };
   vm.runInNewContext(patched, context);
-  const accelerators = context.ownerAccelerators();
-  const manager = {
-    getOwnerCommandAccelerators: (commandId) => accelerators[commandId] ?? [],
-    reload: (_owner, _conversationId, { ignoreCache }, _browserTabId) => reloads.push(ignoreCache),
-    runCommandInOwner: (commandId) => runCommands.push(commandId),
-    setInteractionMode() {},
-  };
-  const handler = context.wire(
-    manager,
-    { owner: { focus() {} } },
-    { browserTabId: "browser-tab", conversationId: "conversation" },
-  );
-  const input = (accelerator) => ({
-    accelerator,
-    isAutoRepeat: false,
-    type: "keyDown",
-  });
-  const dispatch = (accelerator) => {
-    const event = { prevented: false, preventDefault() { this.prevented = true; } };
-    handler(event, input(accelerator));
-    return event;
-  };
 
-  const defaultReload = dispatch("Ctrl+R");
-  const reload = dispatch("Ctrl+Alt+Y");
-  const hardReload = dispatch("Ctrl+Shift+F5");
+  await context.runReload(false);
+  await context.runReload(true);
 
-  assert.equal(defaultReload.prevented, false);
-  assert.equal(reload.prevented, true);
-  assert.equal(hardReload.prevented, true);
-  assert.deepEqual(reloads, [false, true]);
-  assert.deepEqual(runCommands, []);
-});
-
-test("keeps Linux browser reload menu accelerators enabled after browser focus changes", () => {
-  const source = "let focusedWindow=BrowserWindow.getFocusedWindow(),focusedWebContents=webContents.getFocusedWebContents(),reloadEnabled=focusedWindow!=null&&!focusedWindow.isDestroyed()&&!!getBrowserSidebarManager(focusedWindow)?.canReloadActiveVisiblePage(focusedWindow,focusedWebContents),reload={enabled:reloadEnabled};";
-  const patched = applyPatchTwice(applyLinuxBrowserReloadMenuEnablePatch, source);
-
+  assert.deepEqual(reloads, ["reload", "hard-reload"]);
   assert.match(patched, /reloadEnabled=process\.platform===`linux`\|\|focusedWindow!=null/);
-  assert.match(patched, /reload=\{enabled:reloadEnabled\}/);
 });
 
 test("patches current opaque window surface background helper shape for Linux", () => {

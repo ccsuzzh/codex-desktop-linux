@@ -305,89 +305,33 @@ function applyLinuxApplicationMenuPatch(currentSource) {
   );
 }
 
-function applyLinuxBrowserReloadShortcutCapturePatch(currentSource) {
-  const patchMarker = "codexLinuxCommandKeymapState";
+function applyLinuxAppReloadShortcutsPatch(currentSource) {
+  const patchMarker = "codexLinuxReloadAppWindow";
   if (currentSource.includes(patchMarker)) {
-    return currentSource;
-  }
-
-  const commandListReplacement =
-    "[`hardReloadBrowserPage`,`nextRecentThread`,`nextThread`,`openBrowserTab`,`previousRecentThread`,`previousThread`,`reloadBrowserPage`]";
-  const commandListPattern =
-    /\[`nextRecentThread`,`nextThread`,`openBrowserTab`,`previousRecentThread`,`previousThread`\]/;
-  const acceleratorResolverPattern =
-    /let ([A-Za-z_$][\w$]*)=process\.platform===`darwin`,([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)=>\s*([A-Za-z_$][\w$]*)\.Gt\(\{commandId:\3,isMacOS:\1\}\);/;
-  const acceleratorMapPattern =
-    /return\{closeTab:([A-Za-z_$][\w$]*)\(`closeTab`\),nextTab:\1\(`nextTab`\),nextRecentThread:\1\(`nextRecentThread`\),nextThread:\1\(`nextThread`\),openBrowserTab:\1\(`openBrowserTab`\),previousTab:\1\(`previousTab`\),previousRecentThread:\1\(`previousRecentThread`\),previousThread:\1\(`previousThread`\)\}/;
-  const handlerSignaturePattern =
-    /owner:([A-Za-z_$][\w$]*),runCommandInOwner:([A-Za-z_$][\w$]*),setInteractionMode:([A-Za-z_$][\w$]*)/;
-  const reloadCallbackPattern =
-    /,setInteractionMode:\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)=>\{([A-Za-z_$][\w$]*)\.setInteractionMode\(([A-Za-z_$][\w$]*)\.owner,([A-Za-z_$][\w$]*)\.conversationId,\1,\5\.browserTabId,\2\)\}\}\),/;
-  const resolverMatch = currentSource.match(acceleratorResolverPattern);
-  const mapMatch = currentSource.match(acceleratorMapPattern);
-  const signatureMatch = currentSource.match(handlerSignaturePattern);
-  const callbackMatch = currentSource.match(reloadCallbackPattern);
-  if (
-    !commandListPattern.test(currentSource)
-    || resolverMatch == null
-    || mapMatch == null
-    || signatureMatch == null
-    || callbackMatch == null
-  ) {
-    console.warn("WARN: Could not find browser WebContents owner shortcut resolver — skipping Linux browser reload shortcut capture patch");
-    return currentSource;
-  }
-
-  const [, isMacAlias, resolverAlias, commandIdAlias, commandsAlias] = resolverMatch;
-  const acceleratorResolverReplacement =
-    `let ${isMacAlias}=process.platform===\`darwin\`,${patchMarker}=${commandsAlias}.qt(),${resolverAlias}=${commandIdAlias}=>${commandsAlias}.Qt({commandId:${commandIdAlias},keymapState:${patchMarker},isMacOS:${isMacAlias}});`;
-  const acceleratorMapReplacement =
-    `return{closeTab:${resolverAlias}(\`closeTab\`),hardReloadBrowserPage:${resolverAlias}(\`hardReloadBrowserPage\`),nextTab:${resolverAlias}(\`nextTab\`),nextRecentThread:${resolverAlias}(\`nextRecentThread\`),nextThread:${resolverAlias}(\`nextThread\`),openBrowserTab:${resolverAlias}(\`openBrowserTab\`),previousTab:${resolverAlias}(\`previousTab\`),previousRecentThread:${resolverAlias}(\`previousRecentThread\`),previousThread:${resolverAlias}(\`previousThread\`),reloadBrowserPage:${resolverAlias}(\`reloadBrowserPage\`)}`;
-  const [, ownerAlias] = signatureMatch;
-  const dispatchPattern = new RegExp(
-    `if\\(([A-Za-z_$][\\w$]*)\\.preventDefault\\(\\),${ownerAlias.replaceAll("$", "\\$")}\\.focus\\(\\),([A-Za-z_$][\\w$]*)\\.allowAppShellTabShortcut\\)\\{`,
-  );
-  const dispatchMatch = currentSource.match(dispatchPattern);
-  if (dispatchMatch == null) {
-    console.warn("WARN: Could not find browser WebContents owner shortcut dispatch — skipping Linux browser reload shortcut capture patch");
-    return currentSource;
-  }
-  const [, inputEventAlias, matchedCommandAlias] = dispatchMatch;
-  const dispatchReplacement =
-    `${inputEventAlias}.preventDefault();if(${matchedCommandAlias}.commandId===\`reloadBrowserPage\`){codexLinuxReloadBrowserPage(!1);return}if(${matchedCommandAlias}.commandId===\`hardReloadBrowserPage\`){codexLinuxReloadBrowserPage(!0);return}if(${ownerAlias}.focus(),${matchedCommandAlias}.allowAppShellTabShortcut){`;
-  const [, setModeAlias, entrySourceAlias, managerAlias, windowAlias, pageAlias] = callbackMatch;
-  const reloadCallbackReplacement =
-    `,reloadBrowserPage:codexLinuxIgnoreCache=>{${managerAlias}.reload(${windowAlias}.owner,${pageAlias}.conversationId,{ignoreCache:codexLinuxIgnoreCache},${pageAlias}.browserTabId)},setInteractionMode:(${setModeAlias},${entrySourceAlias})=>{${managerAlias}.setInteractionMode(${windowAlias}.owner,${pageAlias}.conversationId,${setModeAlias},${pageAlias}.browserTabId,${entrySourceAlias})}}),`;
-
-  return currentSource
-    .replace(commandListPattern, commandListReplacement)
-    .replace(acceleratorResolverPattern, acceleratorResolverReplacement)
-    .replace(acceleratorMapPattern, acceleratorMapReplacement)
-    .replace(handlerSignaturePattern, `owner:${ownerAlias},reloadBrowserPage:codexLinuxReloadBrowserPage,runCommandInOwner:$2,setInteractionMode:$3`)
-    .replace(dispatchPattern, dispatchReplacement)
-    .replace(reloadCallbackPattern, reloadCallbackReplacement);
-}
-
-function applyLinuxBrowserReloadMenuEnablePatch(currentSource) {
-  const alreadyPatched =
-    /[A-Za-z_$][\w$]*=process\.platform===`linux`\|\|[A-Za-z_$][\w$]*!=null&&![A-Za-z_$][\w$]*\.isDestroyed\(\)&&!![A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\?\.canReloadActiveVisiblePage\([A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*\)/;
-  if (alreadyPatched.test(currentSource)) {
     return currentSource;
   }
 
   const enabledPattern =
     /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)!=null&&!\2\.isDestroyed\(\)&&!!([A-Za-z_$][\w$]*)\(\2\)\?\.canReloadActiveVisiblePage\(\2,([A-Za-z_$][\w$]*)\)/;
-  const match = currentSource.match(enabledPattern);
-  if (match == null) {
-    console.warn("WARN: Could not find browser reload menu enablement — skipping Linux browser reload menu patch");
+  const reloadHandlerPattern =
+    /([A-Za-z_$][\w$]*)=async\(([A-Za-z_$][\w$]*)=!1\)=>\{let ([A-Za-z_$][\w$]*)=await ([A-Za-z_$][\w$]*)\(\);if\(!\3\)return;/;
+  const enabledMatch = currentSource.match(enabledPattern);
+  const handlerMatch = currentSource.match(reloadHandlerPattern);
+  if (enabledMatch == null || handlerMatch == null) {
+    console.warn("WARN: Could not find native browser reload menu actions — skipping Linux app reload shortcut patch");
     return currentSource;
   }
 
-  const [, enabledAlias, windowAlias, browserSidebarManagerAlias, focusedWebContentsAlias] = match;
-  return currentSource.replace(
-    enabledPattern,
-    `${enabledAlias}=process.platform===\`linux\`||${windowAlias}!=null&&!${windowAlias}.isDestroyed()&&!!${browserSidebarManagerAlias}(${windowAlias})?.canReloadActiveVisiblePage(${windowAlias},${focusedWebContentsAlias})`,
-  );
+  const [, enabledAlias, windowAlias, browserSidebarManagerAlias, focusedWebContentsAlias] = enabledMatch;
+  const [, reloadHandlerAlias, ignoreCacheAlias, targetWindowAlias, getWindowAlias] = handlerMatch;
+  const enabledReplacement =
+    `${enabledAlias}=process.platform===\`linux\`||${windowAlias}!=null&&!${windowAlias}.isDestroyed()&&!!${browserSidebarManagerAlias}(${windowAlias})?.canReloadActiveVisiblePage(${windowAlias},${focusedWebContentsAlias})`;
+  const handlerReplacement =
+    `${reloadHandlerAlias}=async(${ignoreCacheAlias}=!1)=>{let ${targetWindowAlias}=await ${getWindowAlias}();if(!${targetWindowAlias})return;if(process.platform===\`linux\`){let ${patchMarker}=${targetWindowAlias}.webContents;if(${ignoreCacheAlias}){${patchMarker}.reloadIgnoringCache();return}${targetWindowAlias}.reload();return}`;
+
+  return currentSource
+    .replace(enabledPattern, enabledReplacement)
+    .replace(reloadHandlerPattern, handlerReplacement);
 }
 
 function applyLinuxSetIconPatch(currentSource, iconAsset) {
@@ -649,9 +593,8 @@ process.platform===\`linux\`?Promise.resolve((()=>{let __codexLinuxAboutIcon=$5.
 
 module.exports = {
   applyLinuxAboutDialogPatch,
+  applyLinuxAppReloadShortcutsPatch,
   applyLinuxApplicationMenuPatch,
-  applyLinuxBrowserReloadShortcutCapturePatch,
-  applyLinuxBrowserReloadMenuEnablePatch,
   applyLinuxMenuPatch,
   applyLinuxNativeTitlebarPatch,
   applyLinuxOpaqueBackgroundPatch,

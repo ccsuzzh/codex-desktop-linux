@@ -6,9 +6,8 @@ const {
 } = require("../../../../descriptor.js");
 const {
   applyLinuxAboutDialogPatch,
+  applyLinuxAppReloadShortcutsPatch,
   applyLinuxApplicationMenuPatch,
-  applyLinuxBrowserReloadShortcutCapturePatch,
-  applyLinuxBrowserReloadMenuEnablePatch,
   applyLinuxWindowOptionsPatch,
   applyLinuxNativeTitlebarPatch,
   applyLinuxMenuPatch,
@@ -79,18 +78,11 @@ module.exports = [
     apply: applyLinuxApplicationMenuPatch,
   }),
   mainBundlePatch({
-    id: "linux-browser-reload-shortcut-capture",
+    id: "linux-app-reload-shortcuts",
     phase: "main-bundle",
     order: 67,
     ciPolicy: "optional",
-    apply: applyLinuxBrowserReloadShortcutCapturePatch,
-  }),
-  mainBundlePatch({
-    id: "linux-browser-reload-menu-enable",
-    phase: "main-bundle",
-    order: 68,
-    ciPolicy: "optional",
-    apply: applyLinuxBrowserReloadMenuEnablePatch,
+    apply: applyLinuxAppReloadShortcutsPatch,
   }),
   mainBundlePatch({
     id: "linux-native-titlebar",
