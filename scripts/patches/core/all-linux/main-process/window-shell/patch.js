@@ -8,6 +8,7 @@ const {
   applyLinuxAboutDialogPatch,
   applyLinuxApplicationMenuPatch,
   applyLinuxBrowserReloadShortcutCapturePatch,
+  applyLinuxBrowserReloadMenuEnablePatch,
   applyLinuxWindowOptionsPatch,
   applyLinuxNativeTitlebarPatch,
   applyLinuxMenuPatch,
@@ -83,6 +84,13 @@ module.exports = [
     order: 67,
     ciPolicy: "optional",
     apply: applyLinuxBrowserReloadShortcutCapturePatch,
+  }),
+  mainBundlePatch({
+    id: "linux-browser-reload-menu-enable",
+    phase: "main-bundle",
+    order: 68,
+    ciPolicy: "optional",
+    apply: applyLinuxBrowserReloadMenuEnablePatch,
   }),
   mainBundlePatch({
     id: "linux-native-titlebar",

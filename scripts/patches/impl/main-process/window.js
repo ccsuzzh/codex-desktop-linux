@@ -368,6 +368,28 @@ function applyLinuxBrowserReloadShortcutCapturePatch(currentSource) {
     .replace(reloadCallbackPattern, reloadCallbackReplacement);
 }
 
+function applyLinuxBrowserReloadMenuEnablePatch(currentSource) {
+  const alreadyPatched =
+    /[A-Za-z_$][\w$]*=process\.platform===`linux`\|\|[A-Za-z_$][\w$]*!=null&&![A-Za-z_$][\w$]*\.isDestroyed\(\)&&!![A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\?\.canReloadActiveVisiblePage\([A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*\)/;
+  if (alreadyPatched.test(currentSource)) {
+    return currentSource;
+  }
+
+  const enabledPattern =
+    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)!=null&&!\2\.isDestroyed\(\)&&!!([A-Za-z_$][\w$]*)\(\2\)\?\.canReloadActiveVisiblePage\(\2,([A-Za-z_$][\w$]*)\)/;
+  const match = currentSource.match(enabledPattern);
+  if (match == null) {
+    console.warn("WARN: Could not find browser reload menu enablement — skipping Linux browser reload menu patch");
+    return currentSource;
+  }
+
+  const [, enabledAlias, windowAlias, browserSidebarManagerAlias, focusedWebContentsAlias] = match;
+  return currentSource.replace(
+    enabledPattern,
+    `${enabledAlias}=process.platform===\`linux\`||${windowAlias}!=null&&!${windowAlias}.isDestroyed()&&!!${browserSidebarManagerAlias}(${windowAlias})?.canReloadActiveVisiblePage(${windowAlias},${focusedWebContentsAlias})`,
+  );
+}
+
 function applyLinuxSetIconPatch(currentSource, iconAsset) {
   if (iconAsset == null) {
     return currentSource;
@@ -629,6 +651,7 @@ module.exports = {
   applyLinuxAboutDialogPatch,
   applyLinuxApplicationMenuPatch,
   applyLinuxBrowserReloadShortcutCapturePatch,
+  applyLinuxBrowserReloadMenuEnablePatch,
   applyLinuxMenuPatch,
   applyLinuxNativeTitlebarPatch,
   applyLinuxOpaqueBackgroundPatch,

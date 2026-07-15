@@ -67,6 +67,7 @@ const {
   applyLinuxAboutDialogPatch,
   applyLinuxApplicationMenuPatch,
   applyLinuxBrowserReloadShortcutCapturePatch,
+  applyLinuxBrowserReloadMenuEnablePatch,
   applyLinuxMenuPatch,
   applyLinuxNativeTitlebarPatch,
   applyLinuxOpaqueBackgroundPatch,
@@ -964,6 +965,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-config-write-version-conflict",
     "linux-application-menu",
     "linux-browser-reload-shortcut-capture",
+    "linux-browser-reload-menu-enable",
     "linux-x11-project-picker",
     "opaque-window-default-general-settings",
     "opaque-window-default-webview-index",
@@ -2835,6 +2837,14 @@ test("captures remapped browser reload shortcuts through the native keymap", () 
   assert.equal(hardReload.prevented, true);
   assert.deepEqual(reloads, [false, true]);
   assert.deepEqual(runCommands, []);
+});
+
+test("keeps Linux browser reload menu accelerators enabled after browser focus changes", () => {
+  const source = "let focusedWindow=BrowserWindow.getFocusedWindow(),focusedWebContents=webContents.getFocusedWebContents(),reloadEnabled=focusedWindow!=null&&!focusedWindow.isDestroyed()&&!!getBrowserSidebarManager(focusedWindow)?.canReloadActiveVisiblePage(focusedWindow,focusedWebContents),reload={enabled:reloadEnabled};";
+  const patched = applyPatchTwice(applyLinuxBrowserReloadMenuEnablePatch, source);
+
+  assert.match(patched, /reloadEnabled=process\.platform===`linux`\|\|focusedWindow!=null/);
+  assert.match(patched, /reload=\{enabled:reloadEnabled\}/);
 });
 
 test("patches current opaque window surface background helper shape for Linux", () => {
