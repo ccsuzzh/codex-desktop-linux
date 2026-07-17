@@ -94,20 +94,20 @@
 
         codexDmg = pkgs.fetchurl {
           url = "https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg";
-          hash = "sha256-QONIFOdOMJQ8IJ69TalM1N41gaUsW/++K88uSI1jYcY=";
+          hash = "sha256-/0WRUJkWEgB1SScNLSjF54zsa9asIAp62l7WwDE2m4c=";
         };
 
-        codexVersion = "26.707.72221";
-        electronVersion = "42.1.0";
+        codexVersion = "26.715.21425";
+        electronVersion = "42.3.0";
         electronPlatform =
           {
             x86_64-linux = {
               arch = "x64";
-              hash = "sha256-iCBHNDqeIDxs/F05sWbqngJd0laUPg03EfhnJa0OO9k=";
+              hash = "sha256-SHpmfKanNLlYwWz/HfdNnUTSwYpszNtN1R9jAaNWxCA=";
             };
             aarch64-linux = {
               arch = "arm64";
-              hash = "sha256-HnAPfz2u95TMRSNeUcEXJmSu1JpOdze4iW3cOYv/TX0=";
+              hash = "sha256-Kjdf+XP7e93FOKT2eyFBlH6dclE6G6or6r7Cp/Zc0PA=";
             };
           }.${system} or (throw "codex-desktop-linux Nix package is not supported on ${system}");
 
@@ -118,7 +118,7 @@
 
         electronHeaders = pkgs.fetchurl {
           url = "https://artifacts.electronjs.org/headers/dist/v${electronVersion}/node-v${electronVersion}-headers.tar.gz";
-          hash = "sha256-DPwdIPJS1sKb3RSx88qjDtxkd9uT5aZiBnRCSzjc3f0=";
+          hash = "sha256-ghAJ+cGDAFDYlK755hkGywpTeyAAstm77ZmF//HV4NA=";
         };
 
         browserUseNodeReplRuntime = pkgs.fetchurl {
