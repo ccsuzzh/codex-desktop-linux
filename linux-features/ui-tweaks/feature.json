@@ -8,6 +8,13 @@
     "stageHook": "./stage.sh",
     "cleanupHook": "./cleanup.sh"
   },
+  "runtimeHooks": {
+    "prelaunch": {
+      "source": "sync-desktop-icon.sh",
+      "name": "dock-icon-cleanup.sh",
+      "mode": "0755"
+    }
+  },
   "tweaks": {
     "appearance": {
       "dockIcon": {

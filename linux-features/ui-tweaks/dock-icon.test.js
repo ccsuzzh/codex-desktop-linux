@@ -9,7 +9,9 @@ const path = require("node:path");
 const test = require("node:test");
 
 const {
+  enabledLinuxFeatureInstallPlan,
   loadLinuxFeaturePatchDescriptors,
+  stageEnabledLinuxFeatureInstall,
 } = require("../../scripts/lib/linux-features.js");
 const { patchAssetFiles } = require("../../scripts/patches/lib/assets.js");
 const {
@@ -114,6 +116,44 @@ test("Dock icon descriptors remain disabled until the nested tweak is enabled", 
     },
   );
   assert.equal(dockIconEnabled({}), false);
+});
+
+test("ui-tweaks stages a Dock icon cleanup hook while the nested tweak is disabled", () => {
+  const featuresRoot = path.resolve(__dirname, "..");
+  withFeatureConfig(dockIconFeatureConfig(false), () => {
+    const plan = enabledLinuxFeatureInstallPlan({ featuresRoot });
+    assert.deepEqual(
+      plan.runtimeHooks.map((hook) => [
+        hook.id,
+        hook.key,
+        path.relative(featuresRoot, hook.source),
+        hook.target,
+        hook.mode,
+      ]),
+      [[
+        "ui-tweaks",
+        "prelaunch",
+        path.join("ui-tweaks", "sync-desktop-icon.sh"),
+        ".codex-linux/prelaunch.d/ui-tweaks-dock-icon-cleanup.sh",
+        0o755,
+      ]],
+    );
+
+    const appDir = fs.mkdtempSync(path.join(os.tmpdir(), "dock-icon-hook-stage-"));
+    try {
+      stageEnabledLinuxFeatureInstall(appDir, { featuresRoot });
+      const hook = path.join(
+        appDir,
+        ".codex-linux",
+        "prelaunch.d",
+        "ui-tweaks-dock-icon-cleanup.sh",
+      );
+      assert.equal(fs.readFileSync(hook, "utf8"), fs.readFileSync(path.join(__dirname, "sync-desktop-icon.sh"), "utf8"));
+      assert.equal(fs.statSync(hook).mode & 0o777, 0o755);
+    } finally {
+      fs.rmSync(appDir, { recursive: true, force: true });
+    }
+  });
 });
 
 test("main patch enables official previews and synchronizes Linux window and tray icons", () => {
@@ -486,6 +526,21 @@ function runDesktopSync(selection, iconPath, env) {
   );
 }
 
+function runDesktopCleanup(appDir, env) {
+  return childProcess.spawnSync(
+    "bash",
+    [path.join(__dirname, "sync-desktop-icon.sh"), appDir, "state", "log"],
+    {
+      encoding: "utf8",
+      env: {
+        ...env,
+        CODEX_LINUX_APP_DIR: appDir,
+        CODEX_LINUX_FEATURE_HOOK_PHASE: "prelaunch",
+      },
+    },
+  );
+}
+
 test("desktop synchronization updates a managed KDE launcher atomically", () => {
   const fixture = createDesktopSyncFixture();
   try {
@@ -539,6 +594,104 @@ test("desktop synchronization leaves an unmanaged user launcher untouched", () =
   }
 });
 
+test("prelaunch cleanup removes only marker-owned Dock launcher artifacts after nested disable", () => {
+  const fixture = createDesktopSyncFixture();
+  const appDir = path.join(fixture.tempDir, "app");
+  try {
+    fs.mkdirSync(appDir, { recursive: true });
+    assert.equal(runDesktopSync("chatgpt", fixture.firstIcon, fixture.env).status, 0);
+    assert.equal(runDesktopSync("codex-dark", fixture.secondIcon, fixture.env).status, 0);
+    assert.equal(fs.existsSync(fixture.managedDesktop), true);
+    assert.equal(fs.existsSync(fixture.managedIcon("chatgpt")), true);
+    assert.equal(fs.existsSync(fixture.managedIcon("codex-dark")), true);
+
+    const cleaned = runDesktopCleanup(appDir, fixture.env);
+
+    assert.equal(cleaned.status, 0, cleaned.stderr);
+    assert.equal(fs.existsSync(fixture.managedDesktop), false);
+    assert.equal(fs.existsSync(fixture.managedIcon("chatgpt")), false);
+    assert.equal(fs.existsSync(fixture.managedIcon("codex-dark")), false);
+    assert.deepEqual(fs.readFileSync(fixture.callsPath, "utf8").trim().split("\n"), [
+      "kbuildsycoca6",
+      "kbuildsycoca6",
+      "kbuildsycoca6",
+    ]);
+  } finally {
+    fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+  }
+});
+
+test("prelaunch cleanup preserves unmanaged and symlinked desktop artifacts", () => {
+  const fixture = createDesktopSyncFixture();
+  const appDir = path.join(fixture.tempDir, "app");
+  try {
+    fs.mkdirSync(path.dirname(fixture.managedDesktop), { recursive: true });
+    fs.mkdirSync(appDir, { recursive: true });
+    const outside = path.join(fixture.tempDir, "outside.desktop");
+    fs.writeFileSync(outside, "[Desktop Entry]\nIcon=outside\nX-Codex-Linux-Dock-Icon=1\n");
+    fs.symlinkSync(outside, fixture.managedDesktop);
+    fs.mkdirSync(path.dirname(fixture.managedIcon("chatgpt")), { recursive: true });
+    fs.writeFileSync(fixture.managedIcon("chatgpt"), "unproven-icon");
+
+    const cleaned = runDesktopCleanup(appDir, fixture.env);
+
+    assert.equal(cleaned.status, 0, cleaned.stderr);
+    assert.equal(fs.lstatSync(fixture.managedDesktop).isSymbolicLink(), true);
+    assert.equal(fs.readFileSync(outside, "utf8"), "[Desktop Entry]\nIcon=outside\nX-Codex-Linux-Dock-Icon=1\n");
+    assert.equal(fs.readFileSync(fixture.managedIcon("chatgpt"), "utf8"), "unproven-icon");
+    assert.equal(fs.existsSync(fixture.callsPath), false);
+  } finally {
+    fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+  }
+});
+
+test("prelaunch cleanup preserves a marker-owned launcher changed to an unmanaged icon", () => {
+  const fixture = createDesktopSyncFixture();
+  const appDir = path.join(fixture.tempDir, "app");
+  try {
+    fs.mkdirSync(path.dirname(fixture.managedDesktop), { recursive: true });
+    fs.mkdirSync(appDir, { recursive: true });
+    fs.writeFileSync(
+      fixture.managedDesktop,
+      "[Desktop Entry]\nName=Customized\nIcon=/tmp/custom.png\nX-Codex-Linux-Dock-Icon=1\n",
+    );
+    fs.mkdirSync(path.dirname(fixture.managedIcon("chatgpt")), { recursive: true });
+    fs.writeFileSync(fixture.managedIcon("chatgpt"), "previous-managed-icon");
+
+    const cleaned = runDesktopCleanup(appDir, fixture.env);
+
+    assert.equal(cleaned.status, 0, cleaned.stderr);
+    assert.equal(
+      fs.readFileSync(fixture.managedDesktop, "utf8"),
+      "[Desktop Entry]\nName=Customized\nIcon=/tmp/custom.png\nX-Codex-Linux-Dock-Icon=1\n",
+    );
+    assert.equal(fs.readFileSync(fixture.managedIcon("chatgpt"), "utf8"), "previous-managed-icon");
+    assert.equal(fs.existsSync(fixture.callsPath), false);
+  } finally {
+    fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+  }
+});
+
+test("prelaunch cleanup keeps managed artifacts while the Dock payload is enabled", () => {
+  const fixture = createDesktopSyncFixture();
+  const appDir = path.join(fixture.tempDir, "app");
+  try {
+    assert.equal(runDesktopSync("chatgpt", fixture.firstIcon, fixture.env).status, 0);
+    const payloadHelper = path.join(appDir, "resources", "dock-icon", "sync-desktop-icon.sh");
+    fs.mkdirSync(path.dirname(payloadHelper), { recursive: true });
+    fs.writeFileSync(payloadHelper, "enabled");
+
+    const cleaned = runDesktopCleanup(appDir, fixture.env);
+
+    assert.equal(cleaned.status, 0, cleaned.stderr);
+    assert.equal(fs.existsSync(fixture.managedDesktop), true);
+    assert.equal(fs.existsSync(fixture.managedIcon("chatgpt")), true);
+    assert.deepEqual(fs.readFileSync(fixture.callsPath, "utf8").trim().split("\n"), ["kbuildsycoca6"]);
+  } finally {
+    fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+  }
+});
+
 test("desktop synchronization discovers packaged launchers through XDG_DATA_DIRS", () => {
   const fixture = createDesktopSyncFixture();
   try {
@@ -546,12 +699,26 @@ test("desktop synchronization discovers packaged launchers through XDG_DATA_DIRS
     const dataDir = path.join(fixture.tempDir, "profile", "share");
     const sourceDir = path.join(dataDir, "applications");
     fs.mkdirSync(sourceDir, { recursive: true });
-    fs.copyFileSync(
-      fixture.env.CODEX_LINUX_DESKTOP_FILE_SOURCE,
+    fs.writeFileSync(
       path.join(sourceDir, `${appId}.desktop`),
+      [
+        "[Desktop Entry]",
+        "Name=Side by side",
+        `Exec=env BAMF_DESKTOP_FILE_HINT=${sourceDir}/${appId}.desktop CHROME_DESKTOP=${appId}.desktop /opt/${appId}/start.sh %u`,
+        `Icon=${appId}`,
+        `StartupWMClass=${appId}`,
+        `X-GNOME-WMClass=${appId}`,
+        "Type=Application",
+        "Actions=new-window;",
+        "",
+        "[Desktop Action new-window]",
+        "Name=New Window",
+        `Exec=env BAMF_DESKTOP_FILE_HINT=${sourceDir}/${appId}.desktop CHROME_DESKTOP=${appId}.desktop /opt/${appId}/start.sh --new-instance`,
+        "",
+      ].join("\n"),
     );
     delete fixture.env.CODEX_LINUX_DESKTOP_FILE_SOURCE;
-    delete fixture.env.BAMF_DESKTOP_FILE_HINT;
+    fixture.env.BAMF_DESKTOP_FILE_HINT = path.join(fixture.tempDir, "codex-desktop.desktop");
     fixture.env.CODEX_LINUX_APP_ID = appId;
     fixture.env.XDG_DATA_DIRS = dataDir;
 
@@ -569,6 +736,52 @@ test("desktop synchronization discovers packaged launchers through XDG_DATA_DIRS
     assert.equal(result.status, 0, result.stderr);
     assert.equal(fs.readFileSync(managedIcon, "utf8"), "first-icon");
     assert.match(fs.readFileSync(managedDesktop, "utf8"), /^X-Codex-Linux-Dock-Icon=1$/m);
+  } finally {
+    fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+  }
+});
+
+test("desktop synchronization rejects a default launcher copied to a side-by-side app id", () => {
+  const fixture = createDesktopSyncFixture();
+  try {
+    const appId = "chatgpt-dock-side";
+    const mismatchedSource = path.join(fixture.tempDir, `${appId}.desktop`);
+    fs.writeFileSync(
+      mismatchedSource,
+      [
+        "[Desktop Entry]",
+        "Name=ChatGPT",
+        "Exec=env BAMF_DESKTOP_FILE_HINT=/usr/share/applications/codex-desktop.desktop CHROME_DESKTOP=codex-desktop.desktop /usr/bin/codex-desktop %u",
+        "Icon=codex-desktop",
+        "StartupWMClass=codex-desktop",
+        "X-GNOME-WMClass=codex-desktop",
+        "Type=Application",
+        "Actions=new-window;",
+        "",
+        "[Desktop Action new-window]",
+        "Name=New Window",
+        "Exec=env BAMF_DESKTOP_FILE_HINT=/usr/share/applications/codex-desktop.desktop CHROME_DESKTOP=codex-desktop.desktop CODEX_MULTI_LAUNCH=1 /usr/bin/codex-desktop --new-instance",
+        "",
+      ].join("\n"),
+    );
+    fixture.env.CODEX_LINUX_APP_ID = appId;
+    fixture.env.CODEX_LINUX_DESKTOP_FILE_SOURCE = mismatchedSource;
+
+    const result = runDesktopSync("chatgpt", fixture.firstIcon, fixture.env);
+    const sideDesktop = path.join(fixture.dataHome, "applications", `${appId}.desktop`);
+    const sideIcon = path.join(
+      fixture.dataHome,
+      "icons",
+      "hicolor",
+      "256x256",
+      "apps",
+      `${appId}-dock-chatgpt.png`,
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.existsSync(sideDesktop), false);
+    assert.equal(fs.existsSync(sideIcon), false);
+    assert.equal(fs.existsSync(fixture.callsPath), false);
   } finally {
     fs.rmSync(fixture.tempDir, { recursive: true, force: true });
   }

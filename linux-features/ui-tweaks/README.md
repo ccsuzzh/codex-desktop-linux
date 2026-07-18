@@ -59,7 +59,9 @@ launcher follows the selected icon without reloading Plasma Shell. The Codex
 resources are cropped to the same visual occupancy as the ChatGPT icon because
 Linux taskbars do not apply macOS Dock normalization. Existing user-managed
 desktop entries remain untouched. Packaged launchers are discovered from the
-runtime desktop hint or the standard `XDG_DATA_DIRS` application paths.
+runtime desktop hint or the standard `XDG_DATA_DIRS` application paths. The
+source launcher must match the active app id before it can be copied, so a
+side-by-side identity cannot inherit the default package's launch commands.
 
 This tweak is independently disabled by default. Enable it while keeping the
 rest of `ui-tweaks` configurable:
@@ -85,7 +87,9 @@ Config keys:
 
 - `enabled`: `true` applies the three Dock icon descriptors and stages their
   resources. `false` skips Dock-specific asset checks and removes any staged
-  Dock icon payload without disabling other UI tweaks.
+  Dock icon payload without disabling other UI tweaks. On the next cold start,
+  a prelaunch hook also removes a marker-owned user-local launcher and its
+  managed icon files. Unmanaged or symlinked desktop artifacts are preserved.
 
 ### `modelPicker.showModelsByDefault`
 
