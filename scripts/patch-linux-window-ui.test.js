@@ -2903,21 +2903,23 @@ test("removes the Linux menu next to Windows removeMenu calls", () => {
 
   assert.equal(
     patched,
-    "process.platform===`linux`&&k.removeMenu(),process.platform===`win32`&&k.removeMenu(),",
+    "process.platform===`linux`&&(k.on(`system-context-menu`,e=>e.preventDefault()),k.removeMenu()),process.platform===`win32`&&k.removeMenu(),",
   );
 });
 
 test("patches remaining Windows menu snippets when another copy is already Linux-patched", () => {
   const windowsMenuSnippet = "process.platform===`win32`&&k.removeMenu(),";
-  const linuxMenuPatch = "process.platform===`linux`&&k.removeMenu(),";
+  const linuxMenuPatch =
+    "process.platform===`linux`&&(k.on(`system-context-menu`,e=>e.preventDefault()),k.removeMenu()),";
   const source = `${linuxMenuPatch}${windowsMenuSnippet}function createSecondWindow(){${windowsMenuSnippet}}`;
 
   const patched = applyPatchTwice(applyLinuxMenuPatch, source);
 
   assert.equal((patched.match(/removeMenu\(\)/g) ?? []).length, 4);
+  assert.equal((patched.match(/system-context-menu/g) ?? []).length, 2);
   assert.match(
     patched,
-    /function createSecondWindow\(\)\{process\.platform===`linux`&&k\.removeMenu\(\),process\.platform===`win32`&&k\.removeMenu\(\),\}/,
+    /function createSecondWindow\(\)\{process\.platform===`linux`&&\(k\.on\(`system-context-menu`,e=>e\.preventDefault\(\)\),k\.removeMenu\(\)\),process\.platform===`win32`&&k\.removeMenu\(\),\}/,
   );
 });
 
@@ -2929,19 +2931,32 @@ test("upgrades legacy Linux menu snippets to remove the menu", () => {
 
   assert.equal(
     patched,
-    "process.platform===`linux`&&k.removeMenu(),process.platform===`win32`&&k.removeMenu(),",
+    "process.platform===`linux`&&(k.on(`system-context-menu`,e=>e.preventDefault()),k.removeMenu()),process.platform===`win32`&&k.removeMenu(),",
   );
   assert.doesNotMatch(patched, /setMenuBarVisibility/);
 });
 
-test("recognizes the Linux removeMenu snippet as already applied", () => {
+test("upgrades old Linux removeMenu snippets to suppress system context menus", () => {
   const source =
     "process.platform===`linux`&&k.removeMenu(),process.platform===`win32`&&k.removeMenu(),";
 
   const patched = applyPatchTwice(applyLinuxMenuPatch, source);
 
+  assert.equal(
+    patched,
+    "process.platform===`linux`&&(k.on(`system-context-menu`,e=>e.preventDefault()),k.removeMenu()),process.platform===`win32`&&k.removeMenu(),",
+  );
+  assert.equal((patched.match(/system-context-menu/g) ?? []).length, 1);
+});
+
+test("recognizes the Linux system context menu suppression snippet as already applied", () => {
+  const source =
+    "process.platform===`linux`&&(k.on(`system-context-menu`,e=>e.preventDefault()),k.removeMenu()),process.platform===`win32`&&k.removeMenu(),";
+
+  const patched = applyPatchTwice(applyLinuxMenuPatch, source);
+
   assert.equal(patched, source);
-  assert.equal((patched.match(/process\.platform===`linux`&&k\.removeMenu\(\),/g) ?? []).length, 1);
+  assert.equal((patched.match(/system-context-menu/g) ?? []).length, 1);
 });
 
 test("preserves the global application menu on Linux for accelerators", () => {
@@ -9288,7 +9303,10 @@ test("patchMainBundleSource keeps non-icon patches active without an icon asset"
   assert.match(patched, /codexLinuxIsQuitInProgress=\(\)=>codexLinuxQuitInProgress===!0/);
   assert.match(patched, /codexLinuxShouldBypassQuitPrompt=\(\)=>codexLinuxExplicitQuitApproved===!0/);
   assert.match(patched, /n\.app\.on\(`before-quit`,codexLinuxBeforeQuitHandler\)/);
-  assert.match(patched, /process\.platform===`linux`&&k\.removeMenu\(\)/);
+  assert.match(
+    patched,
+    /process\.platform===`linux`&&\(k\.on\(`system-context-menu`,e=>e\.preventDefault\(\)\),k\.removeMenu\(\)\)/,
+  );
   assert.match(patched, /linux:\{label:`File Manager`/);
   assert.match(
     patched,

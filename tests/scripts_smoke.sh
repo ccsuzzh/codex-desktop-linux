@@ -8264,7 +8264,7 @@ test_linux_file_manager_patch_smoke() {
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_contains "$extracted/.vite/build/main-test.js" 'detect:()=>`linux-file-manager`'
     assert_contains "$extracted/.vite/build/main-test.js" 'linux:{label:`File Manager`'
-    assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&D.removeMenu(),process.platform===`win32`&&D.removeMenu(),'
+    assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&(D.on(`system-context-menu`,e=>e.preventDefault()),D.removeMenu()),process.platform===`win32`&&D.removeMenu(),'
     assert_not_contains "$extracted/.vite/build/main-test.js" 'D.setMenuBarVisibility(!1)'
     assert_contains "$extracted/.vite/build/main-test.js" '&&D.setIcon('
     assert_contains "$extracted/webview/assets/app-server-manager-signals-test.js" '`subAgent`in e?e.subAgent:`subagent`in e?e.subagent:null'
