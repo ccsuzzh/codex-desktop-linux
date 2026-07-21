@@ -1340,6 +1340,7 @@ test_appimage_builder_smoke() {
     make_fake_app "$app_dir"
     mkdir -p "$app_dir/resources/codex-cli"
     printf '%s\n' 'upstream-payload' > "$app_dir/resources/codex-cli/preserve.txt"
+    chmod 0775 "$app_dir" "$app_dir/resources"
 
     cat > "$bin_dir/appimagetool" <<'SCRIPT'
 #!/usr/bin/env bash
@@ -1390,6 +1391,8 @@ SCRIPT
     assert_file_exists "$capture_dir/AppDir/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh"
     assert_file_exists "$capture_dir/AppDir/opt/codex-desktop/resources/node-runtime/bin/node"
     assert_file_exists "$capture_dir/AppDir/opt/codex-desktop/resources/codex-cli/preserve.txt"
+    assert_mode "$capture_dir/AppDir/opt/codex-desktop" "755"
+    assert_mode "$capture_dir/AppDir/opt/codex-desktop/resources" "755"
     assert_file_not_exists "$capture_dir/AppDir/opt/codex-desktop/resources/codex-cli/bin/codex"
     assert_file_not_exists "$capture_dir/AppDir/usr/bin/codex-update-manager"
     assert_file_not_exists "$capture_dir/AppDir/usr/lib/systemd/user/codex-update-manager.service"
@@ -2795,6 +2798,7 @@ test_transactional_install_uses_managed_node_and_isolated_reports() {
     assert_contains "$REPO_DIR/install.sh" 'CODEX_ACCEPTANCE_NODE="\$CODEX_MANAGED_NODE_RUNTIME_DIR/bin/node"'
     assert_contains "$REPO_DIR/install.sh" 'report_dir="\$report_base/transactions/\$transaction_id"'
     assert_contains "$REPO_DIR/install.sh" '"\$CODEX_ACCEPTANCE_NODE" "\$SCRIPT_DIR/scripts/validate-upstream-dmg.js"'
+    assert_contains "$REPO_DIR/install.sh" "harden_bundled_plugin_source_tree"
 }
 
 test_installer_cleanup_handles_readonly_trees() {
@@ -5096,14 +5100,46 @@ test_launcher_marketplace_metadata_atomic_staging() (
     local observed_temp
     local observed_target
 
-    mkdir -p "$(dirname "$source_marketplace")" "$target_dir"
+    mkdir -p \
+        "$(dirname "$source_marketplace")" \
+        "$target_dir" \
+        "$codex_home/.tmp/bundled-marketplaces/openai-bundled/plugins"
     printf '%s\n' 'new metadata' > "$source_marketplace"
-    awk '/^stage_bundled_marketplace_metadata\(\) \{/{copy=1} copy{print} copy && /^}/{exit}' \
+    awk '/^make_path_owner_trusted\(\) \{/{copy=1} copy{print} copy && /^}/{exit}' \
         "$REPO_DIR/launcher/start.sh.template" > "$function_file"
+    awk '/^path_has_unsafe_write\(\) \{/{copy=1} copy{print} copy && /^}/{exit}' \
+        "$REPO_DIR/launcher/start.sh.template" >> "$function_file"
+    awk '/^prepare_bundled_marketplace_tmp_paths\(\) \{/{copy=1} copy{print} copy && /^}/{exit}' \
+        "$REPO_DIR/launcher/start.sh.template" >> "$function_file"
+    awk '/^stage_bundled_marketplace_metadata\(\) \{/{copy=1} copy{print} copy && /^}/{exit}' \
+        "$REPO_DIR/launcher/start.sh.template" >> "$function_file"
     # shellcheck source=/dev/null
     source "$function_file"
     SCRIPT_DIR="$app_dir"
     CODEX_HOME="$codex_home"
+
+    umask 0002
+    chmod 0775 \
+        "$codex_home" \
+        "$codex_home/.tmp" \
+        "$codex_home/.tmp/bundled-marketplaces" \
+        "$codex_home/.tmp/bundled-marketplaces/openai-bundled" \
+        "$codex_home/.tmp/bundled-marketplaces/openai-bundled/.agents" \
+        "$codex_home/.tmp/bundled-marketplaces/openai-bundled/.agents/plugins" \
+        "$codex_home/.tmp/bundled-marketplaces/openai-bundled/plugins"
+    prepare_bundled_marketplace_tmp_paths full
+    for trusted_path in \
+        "$codex_home" \
+        "$codex_home/.tmp" \
+        "$codex_home/.tmp/bundled-marketplaces" \
+        "$codex_home/.tmp/bundled-marketplaces/openai-bundled" \
+        "$codex_home/.tmp/bundled-marketplaces/openai-bundled/.agents" \
+        "$codex_home/.tmp/bundled-marketplaces/openai-bundled/.agents/plugins" \
+        "$codex_home/.tmp/bundled-marketplaces/openai-bundled/plugins"; do
+        if find "$trusted_path" -maxdepth 0 -perm /022 -print -quit | grep -q .; then
+            fail "Bundled marketplace parent remained group/world writable: $trusted_path"
+        fi
+    done
 
     for failing_command in cp chmod mv; do
         printf '%s\n' 'existing metadata' > "$target_marketplace"
@@ -5379,7 +5415,7 @@ if "second_instance_handoff_ready" not in runtime_body:
     raise SystemExit("second-instance handoff must skip cold-start setup")
 if "clear_bundled_marketplace_tmp_cache\nreconcile_runtime_state" in runtime_body:
     raise SystemExit("warm-start path must not clear bundled marketplace temp cache")
-if not re.search(r'if needs_cold_start; then\s+log_phase "cold_start_cache_sync_start"\s+clear_bundled_marketplace_tmp_cache.*?stage_bundled_marketplace_metadata.*?sync_browser_use_bundled_plugin_cache &.*?sync_chrome_bundled_plugin_cache &.*?sync_computer_use_bundled_plugin_cache &.*?sync_read_aloud_bundled_plugin_cache &.*?sync_extra_bundled_plugin_cache &.*?run_cold_start_hooks.*?log_phase "cold_start_hooks_dispatched"\s+await_webview_server_ready\s+fi', runtime_body, re.S):
+if not re.search(r'if needs_cold_start; then\s+log_phase "cold_start_cache_sync_start"\s+if ! prepare_bundled_marketplace_tmp_paths; then.*?clear_bundled_marketplace_tmp_cache.*?if ! prepare_bundled_marketplace_tmp_paths full; then.*?stage_bundled_marketplace_metadata.*?sync_browser_use_bundled_plugin_cache &.*?sync_chrome_bundled_plugin_cache &.*?sync_computer_use_bundled_plugin_cache &.*?sync_read_aloud_bundled_plugin_cache &.*?sync_extra_bundled_plugin_cache &.*?run_cold_start_hooks.*?log_phase "cold_start_hooks_dispatched"\s+await_webview_server_ready\s+fi', runtime_body, re.S):
     raise SystemExit("bundled marketplace cleanup, staged metadata, concurrent plugin syncs, cold-start hooks, and the webview readiness wait must run only on cold start")
 # The plugin syncs run concurrently, so the shared marketplace.json is staged
 # exactly once beforehand and every sync is awaited before cold-start hooks.
@@ -8039,6 +8075,7 @@ test_chrome_plugin_staging() {
     local host="$chrome_dir/extension-host/linux/x64/extension-host"
 
     mkdir -p "$workspace" "$install_dir/resources"
+    chmod 0775 "$install_dir" "$install_dir/resources"
     make_fake_chrome_upstream_app "$app_dir"
 
     (
@@ -8048,6 +8085,7 @@ test_chrome_plugin_staging() {
         ARCH="x86_64"
         ICON_SOURCE="$workspace/missing-icon.png"
         CODEX_APP_ID="codex-desktop"
+        umask 0002
         mkdir -p "$WORK_DIR"
         warn() { echo "[WARN] $*" >&2; }
         info() { echo "[INFO] $*" >&2; }
@@ -8061,6 +8099,7 @@ test_chrome_plugin_staging() {
             printf '%s\n' "$fake_host"
         }
         install_bundled_plugin_resources "$app_dir"
+        harden_bundled_plugin_source_tree
     ) >"$output_log" 2>&1
 
     assert_file_exists "$host"
@@ -8114,6 +8153,9 @@ test_chrome_plugin_staging() {
     assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "agent.browsers.list()"
     assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "browser.tabs.new()"
     assert_contains "$install_dir/resources/plugins/openai-bundled/.agents/plugins/marketplace.json" '"name": "chrome"'
+    assert_mode "$install_dir" "755"
+    assert_mode "$install_dir/resources" "755"
+    assert_mode "$install_dir/resources/plugins" "755"
     [ -z "$(find "$install_dir/resources/plugins/openai-bundled" -perm /022 -print -quit)" ] \
         || fail "Expected staged bundled plugin resources to reject group/other writes"
     assert_contains "$output_log" "Chrome plugin staged from upstream DMG"
@@ -8322,7 +8364,7 @@ JS
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_contains "$extracted/.vite/build/main-test.js" '(process.platform===`win32`||process.platform===`linux`)&&!this.isAppQuitting&&!(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress())'
-    assert_contains "$extracted/.vite/build/main-test.js" 'r=typeof codexLinuxRegisterTray===`function`?codexLinuxRegisterTray(new n.Tray(t.defaultIcon)):new n.Tray(t.defaultIcon)'
+    assert_contains "$extracted/.vite/build/main-test.js" 'r=codexLinuxRegisterTray(new n.Tray(t.defaultIcon))'
     assert_contains "$extracted/.vite/build/main-test.js" 'if(typeof t.whenReady!=`function`)return!0'
     assert_contains "$extracted/.vite/build/main-test.js" 'return typeof t.isReady==`function`?t.isReady():!0'
     assert_contains "$extracted/.vite/build/main-test.js" 'let __codexLinuxTrayFallbackIcon=n.nativeImage.createFromPath(process.resourcesPath+`/../content/webview/assets/app-test.png`)'
@@ -8582,8 +8624,11 @@ JS
     cat > "$extracted/webview/assets/settings-shared-test.js" <<'JS'
 import{t as d}from"./jsx-runtime-test.js";var c={"general-settings":{id:`settings.nav.general-settings`,defaultMessage:`General`,description:`Title for general settings section`},"keyboard-shortcuts":{id:`settings.nav.keyboard-shortcuts`,defaultMessage:`Keyboard shortcuts`,description:`Title for keyboard shortcuts settings section`}};function m(e){let t=(0,u.c)(17),{slug:r}=e;switch(r){case`keyboard-shortcuts`:{let e;return t[1]===Symbol.for(`react.memo_cache_sentinel`)?(e=(0,d.jsx)(n,{id:`settings.section.keyboard-shortcuts`,defaultMessage:`Keyboard shortcuts`,description:`Title for keyboard shortcuts settings section`}),t[1]=e):e=t[1],e}case`general-settings`:{let e;return t[2]===Symbol.for(`react.memo_cache_sentinel`)?(e=(0,d.jsx)(n,{id:`settings.section.general-settings`,defaultMessage:`General`,description:`Title for general settings section`}),t[2]=e):e=t[2],e}}}
 JS
+    cat > "$extracted/webview/assets/use-visible-settings-sections-test.js" <<'JS'
+var Xge={"general-settings":xh,"keyboard-shortcuts":ks,appearance:Pf,agent:gU};
+JS
     cat > "$extracted/webview/assets/index-test.js" <<'JS'
-import{n as routeModule,s as routeToESM}from"./rolldown-runtime-test.js";import{I as routeJsxFactory,R as routeReactFactory}from"./shared-runtime-test.js";function Z(e){let r=(0,RouteReact.lazy)(e);function SettingsRouteWrapper(){let t=(0,RouteReact.useState)(null);return (0,RouteJsx.jsx)(r,{children:t})}return SettingsRouteWrapper}var RouteReact,RouteJsx;routeModule(()=>{RouteReact=routeToESM(routeReactFactory(),1),RouteJsx=routeJsxFactory()})();var Xge={"general-settings":xh,"keyboard-shortcuts":ks,appearance:Pf,agent:gU},H7={},Zge=[`general-settings`,`import`,`profile`,`keyboard-shortcuts`,`appearance`,`agent`,`personalization`,`mcp-settings`,`connections`,`git-settings`,`local-environments`,`worktrees`,`browser-use`,`computer-use`,`data-controls`],Qge=[{key:`app`,heading:H7.appHeading,slugs:[`general-settings`,`import`,`profile`,`keyboard-shortcuts`,`appearance`,`connections`,`git-settings`,`usage`]}];function n_e(){let e=e=>{switch(e.slug){case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:return!0}};if(O)bb0:switch(D.slug){case`usage`:k=g;break bb0;case`appearance`:case`general-settings`:case`agent`:case`git-settings`:case`account`:case`data-controls`:case`personalization`:k=!1;break bb0;case`keyboard-shortcuts`:k=!1;break bb0;}}function s_e(e){let{slug:n}=e,r=c_e[n];return (0,$.jsx)(r,{})}var c_e={"general-settings":Z(async()=>(await s(async()=>{let{GeneralSettings:e}=await import(`./general-settings-DZbwMmWz.js`);return{GeneralSettings:e}},[],import.meta.url)).GeneralSettings),"keyboard-shortcuts":Z(async()=>(await s(async()=>{let{KeyboardShortcutsSettings:e}=await import(`./keyboard-shortcuts-settings-test.js`);return{KeyboardShortcutsSettings:e}},[],import.meta.url)).KeyboardShortcutsSettings)};export{Z};
+import{n as routeModule,s as routeToESM}from"./rolldown-runtime-test.js";import{I as routeJsxFactory,R as routeReactFactory}from"./shared-runtime-test.js";function Z(e){let r=(0,RouteReact.lazy)(e);function SettingsRouteWrapper(){let t=(0,RouteReact.useState)(null);return (0,RouteJsx.jsx)(r,{children:t})}return SettingsRouteWrapper}var RouteReact,RouteJsx;routeModule(()=>{RouteReact=routeToESM(routeReactFactory(),1),RouteJsx=routeJsxFactory()})();var H7={},Zge=[`general-settings`,`import`,`profile`,`keyboard-shortcuts`,`appearance`,`agent`,`personalization`,`mcp-settings`,`connections`,`git-settings`,`local-environments`,`worktrees`,`browser-use`,`computer-use`,`data-controls`],Qge=[{key:`app`,heading:H7.appHeading,slugs:[`general-settings`,`import`,`profile`,`keyboard-shortcuts`,`appearance`,`connections`,`git-settings`,`usage`]}];function n_e(){let e=e=>{switch(e.slug){case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:return!0}};if(O)bb0:switch(D.slug){case`usage`:k=g;break bb0;case`appearance`:case`general-settings`:case`agent`:case`git-settings`:case`account`:case`data-controls`:case`personalization`:k=!1;break bb0;case`keyboard-shortcuts`:k=!1;break bb0;}}function s_e(e){let{slug:n}=e,r=c_e[n];return (0,$.jsx)(r,{})}var c_e={"general-settings":Z(async()=>(await s(async()=>{let{GeneralSettings:e}=await import(`./general-settings-DZbwMmWz.js`);return{GeneralSettings:e}},[],import.meta.url)).GeneralSettings),"keyboard-shortcuts":Z(async()=>(await s(async()=>{let{KeyboardShortcutsSettings:e}=await import(`./keyboard-shortcuts-settings-test.js`);return{KeyboardShortcutsSettings:e}},[],import.meta.url)).KeyboardShortcutsSettings)};export{Z};
 JS
     cat > "$extracted/webview/assets/keyboard-shortcuts-settings-test.js" <<'JS'
 import{s as __toESM}from"./chunk-test.js";import{t as __reactFactory}from"./react-test.js";import{t as __jsxFactory}from"./jsx-runtime-test.js";function KeyboardShortcutsSettings(){let t=(0,React.useState)(null);return (0,$.jsx)(`div`,{children:t})}var React,$;initialize(()=>{React=__toESM(__reactFactory(),1),$=__jsxFactory()})();slug:`keyboard-shortcuts`;export{KeyboardShortcutsSettings};
@@ -8611,6 +8656,7 @@ JS
     assert_contains "$extracted/webview/assets/settings-sections-test.js" 'slug:`linux-desktop`'
     assert_contains "$extracted/webview/assets/settings-shared-test.js" "settings.nav.linux-desktop"
     assert_contains "$extracted/webview/assets/settings-shared-test.js" "settings.section.linux-desktop"
+    assert_contains "$extracted/webview/assets/use-visible-settings-sections-test.js" '"linux-desktop":xh,"general-settings":xh'
     assert_contains "$extracted/webview/assets/index-test.js" "linux-desktop-settings-linux.js?v="
     assert_contains "$extracted/webview/assets/index-test.js" 'export{Z,'
     assert_contains "$extracted/webview/assets/index-test.js" 'RouteReact as codexLinuxReact,RouteJsx as codexLinuxJsx'
@@ -8624,6 +8670,7 @@ JS
     assert_occurrence_count "$extracted/webview/assets/settings-sections-test.js" 'slug:`linux-desktop`' '1'
     assert_occurrence_count "$extracted/webview/assets/settings-shared-test.js" "settings.nav.linux-desktop" '1'
     assert_occurrence_count "$extracted/webview/assets/settings-shared-test.js" "settings.section.linux-desktop" '1'
+    assert_occurrence_count "$extracted/webview/assets/use-visible-settings-sections-test.js" '"linux-desktop"' '1'
     assert_occurrence_count "$extracted/webview/assets/index-test.js" "linux-desktop-settings-linux.js" '1'
 }
 
@@ -8645,8 +8692,11 @@ JS
     cat > "$extracted/webview/assets/settings-shared-test.js" <<'JS'
 var c={"general-settings":{id:`settings.nav.general-settings`,defaultMessage:`General`,description:`Title for general settings section`},"keyboard-shortcuts":{id:`settings.nav.keyboard-shortcuts`,defaultMessage:`Keyboard shortcuts`,description:`Title for keyboard shortcuts settings section`}};function m(e){let t=(0,u.c)(17),{slug:r}=e;switch(r){case`general-settings`:{let e;return t[2]===Symbol.for(`react.memo_cache_sentinel`)?(e=(0,d.jsx)(n,{id:`settings.section.general-settings`,defaultMessage:`General`,description:`Title for general settings section`}),t[2]=e):e=t[2],e}}}
 JS
+    cat > "$extracted/webview/assets/use-visible-settings-sections-test.js" <<'JS'
+var Xge={"general-settings":xh,appearance:Pf};
+JS
     cat > "$extracted/webview/assets/index-test.js" <<'JS'
-var Xge={"general-settings":xh,appearance:Pf},H7={},Zge=[`general-settings`,`appearance`],Qge=[{key:`app`,heading:H7.appHeading,slugs:[`general-settings`,`appearance`,`connections`,`git-settings`,`usage`]}];
+var H7={},Zge=[`general-settings`,`appearance`],Qge=[{key:`app`,heading:H7.appHeading,slugs:[`general-settings`,`appearance`,`connections`,`git-settings`,`usage`]}];
 JS
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
