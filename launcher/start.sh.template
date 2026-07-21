@@ -258,6 +258,11 @@ configure_multi_launch_instance() {
 
 configure_multi_launch_instance "$@"
 WEBVIEW_ORIGIN="http://127.0.0.1:$CODEX_LINUX_WEBVIEW_PORT"
+WEBVIEW_RENDERER_URL="$WEBVIEW_ORIGIN/"
+if [ -f "$WEBVIEW_DIR/index.html" ]; then
+    WEBVIEW_INDEX_SHA256="$(sha256sum "$WEBVIEW_DIR/index.html" | awk '{print $1}')"
+    WEBVIEW_RENDERER_URL="${WEBVIEW_ORIGIN}/?v=$WEBVIEW_INDEX_SHA256"
+fi
 
 mkdir -p "$LOG_DIR" "$APP_CONFIG_DIR" "$APP_STATE_DIR" "$LAUNCH_ACTION_RUNTIME_DIR"
 chmod 700 "$LAUNCH_ACTION_RUNTIME_DIR" 2>/dev/null || true
@@ -2269,7 +2274,7 @@ running_app_uses_renderer_url_override() {
     allow_override="$(pid_environ_value "$RUNNING_APP_PID" CODEX_LINUX_ALLOW_RENDERER_URL_OVERRIDE 2>/dev/null || true)"
     truthy_env_value "$allow_override" || return 1
     renderer_url="$(pid_environ_value "$RUNNING_APP_PID" ELECTRON_RENDERER_URL 2>/dev/null || true)"
-    [ -n "$renderer_url" ] && [ "$renderer_url" != "$WEBVIEW_ORIGIN/" ]
+    [ -n "$renderer_url" ] && [ "$renderer_url" != "$WEBVIEW_RENDERER_URL" ]
 }
 
 terminate_stale_electron_with_pidfd() {
@@ -2742,7 +2747,7 @@ adopt_discovered_webview_server() {
 renderer_url_override_is_active() {
     if truthy_env_value "${CODEX_LINUX_ALLOW_RENDERER_URL_OVERRIDE:-}" &&
        [ -n "${ELECTRON_RENDERER_URL:-}" ] &&
-       [ "$ELECTRON_RENDERER_URL" != "$WEBVIEW_ORIGIN/" ]; then
+       [ "$ELECTRON_RENDERER_URL" != "$WEBVIEW_RENDERER_URL" ]; then
         return 0
     fi
 
@@ -4210,12 +4215,12 @@ if [ -z "${CODEX_CLI_PATH:-}" ]; then
 fi
 export CHROME_DESKTOP="${CHROME_DESKTOP:-$CODEX_LINUX_APP_ID.desktop}"
 if ! truthy_env_value "${CODEX_LINUX_ALLOW_RENDERER_URL_OVERRIDE:-}"; then
-    if [ -n "${ELECTRON_RENDERER_URL:-}" ] && [ "$ELECTRON_RENDERER_URL" != "$WEBVIEW_ORIGIN/" ]; then
+    if [ -n "${ELECTRON_RENDERER_URL:-}" ] && [ "$ELECTRON_RENDERER_URL" != "$WEBVIEW_RENDERER_URL" ]; then
         echo "Ignoring inherited ELECTRON_RENDERER_URL; set CODEX_LINUX_ALLOW_RENDERER_URL_OVERRIDE=1 to allow overrides"
     fi
-    export ELECTRON_RENDERER_URL="$WEBVIEW_ORIGIN/"
+    export ELECTRON_RENDERER_URL="$WEBVIEW_RENDERER_URL"
 else
-    export ELECTRON_RENDERER_URL="${ELECTRON_RENDERER_URL:-$WEBVIEW_ORIGIN/}"
+    export ELECTRON_RENDERER_URL="${ELECTRON_RENDERER_URL:-$WEBVIEW_RENDERER_URL}"
 fi
 
 if needs_cold_start && [ -z "$CODEX_CLI_PATH" ]; then

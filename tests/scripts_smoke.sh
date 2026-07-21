@@ -4871,7 +4871,7 @@ test_launcher_rejects_missing_webview_entrypoint() {
     local home_dir="$workspace/home"
     local runtime_dir="$workspace/runtime"
     local electron_marker="$workspace/electron-called"
-    local launcher_log="$home_dir/.cache/codex-desktop/launcher.log"
+    local launcher_log="$home_dir/.cache/codex-renderer-url-test/launcher.log"
 
     mkdir -p \
         "$app_dir/.codex-linux/cold-start.d" \
@@ -4892,7 +4892,7 @@ test_launcher_rejects_missing_webview_entrypoint() {
         printf '%s\n' \
             '#!/usr/bin/env bash' \
             'set -Eeuo pipefail' \
-            'CODEX_LINUX_APP_ID=codex-desktop' \
+            'CODEX_LINUX_APP_ID=codex-renderer-url-test' \
             'CODEX_LINUX_APP_DISPLAY_NAME="Codex Desktop"' \
             'CODEX_LINUX_WEBVIEW_PORT="${CODEX_WEBVIEW_PORT:-5175}"'
         cat "$REPO_DIR/launcher/start.sh.template"
@@ -4948,6 +4948,38 @@ SCRIPT
     [ "$(cat "$electron_marker")" = "http://127.0.0.1:9999/" ] \
         || fail "Launcher should preserve explicit renderer URL override"
     assert_contains "$launcher_log" "Skipping packaged webview setup because ELECTRON_RENDERER_URL override is enabled"
+
+    printf '%s\n' '<!doctype html><title>Codex</title><div id="startup-loader">first build</div>' \
+        > "$app_dir/content/webview/index.html"
+    rm -f "$electron_marker"
+    timeout 20 env -i \
+        PATH="$HOST_TOOL_PATH" \
+        HOME="$home_dir" \
+        XDG_RUNTIME_DIR="$runtime_dir" \
+        CODEX_CLI_PATH="$TRUE_BIN" \
+        CODEX_WEBVIEW_PORT=45675 \
+        ELECTRON_MARKER="$electron_marker" \
+        "$app_dir/start.sh" >/dev/null 2>&1
+    local first_renderer_url
+    first_renderer_url="$(cat "$electron_marker")"
+    [[ "$first_renderer_url" =~ ^http://127\.0\.0\.1:45675/\?v=[0-9a-f]{64}$ ]] \
+        || fail "Packaged renderer URL should include the webview index content hash"
+
+    printf '%s\n' '<!doctype html><title>Codex</title><div id="startup-loader">second build</div>' \
+        > "$app_dir/content/webview/index.html"
+    rm -f "$electron_marker"
+    timeout 20 env -i \
+        PATH="$HOST_TOOL_PATH" \
+        HOME="$home_dir" \
+        XDG_RUNTIME_DIR="$runtime_dir" \
+        CODEX_CLI_PATH="$TRUE_BIN" \
+        CODEX_WEBVIEW_PORT=45675 \
+        ELECTRON_MARKER="$electron_marker" \
+        "$app_dir/start.sh" >/dev/null 2>&1
+    local second_renderer_url
+    second_renderer_url="$(cat "$electron_marker")"
+    [ "$first_renderer_url" != "$second_renderer_url" ] \
+        || fail "Packaged renderer URL should change when the webview index changes"
 }
 
 test_launcher_extra_bundled_plugin_cache_rollback() {
@@ -6067,7 +6099,7 @@ EOF
     assert_not_contains "$REPO_DIR/install.sh" "pkill -f \"http.server 5175\""
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_WEBVIEW_PORT"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_LINUX_ALLOW_RENDERER_URL_OVERRIDE"
-    assert_contains "$REPO_DIR/launcher/start.sh.template" 'export ELECTRON_RENDERER_URL="$WEBVIEW_ORIGIN/"'
+    assert_contains "$REPO_DIR/launcher/start.sh.template" 'export ELECTRON_RENDERER_URL="$WEBVIEW_RENDERER_URL"'
     assert_contains "$REPO_DIR/launcher/start.sh.template" '--app-id="$CODEX_LINUX_APP_ID"'
     assert_contains "$REPO_DIR/scripts/lib/process-detection.sh" "CODEX_APP_ID"
     assert_contains "$REPO_DIR/launcher/start.sh.template" 'ELECTRON_OZONE_HINT="auto"'
@@ -6984,7 +7016,7 @@ test_side_by_side_launcher_identity() {
     assert_contains "$app_dir/start.sh" 'export CODEX_HOME CODEX_LINUX_APP_ID CODEX_LINUX_APP_DISPLAY_NAME CODEX_LINUX_WEBVIEW_PORT CODEX_LINUX_SETTINGS_FILE CODEX_LINUX_FEATURES_DIR'
     assert_contains "$app_dir/start.sh" 'WEBVIEW_ORIGIN="http://127.0.0.1:$CODEX_LINUX_WEBVIEW_PORT"'
     assert_contains "$app_dir/start.sh" "CODEX_LINUX_ALLOW_RENDERER_URL_OVERRIDE"
-    assert_contains "$app_dir/start.sh" 'export ELECTRON_RENDERER_URL="$WEBVIEW_ORIGIN/"'
+    assert_contains "$app_dir/start.sh" 'export ELECTRON_RENDERER_URL="$WEBVIEW_RENDERER_URL"'
     assert_contains "$app_dir/start.sh" "resolve_script_dir"
     assert_contains "$app_dir/start.sh" "configure_side_by_side_app_env"
     assert_contains "$app_dir/start.sh" 'XDG_CONFIG_HOME="${CODEX_XDG_CONFIG_HOME:-$APP_STATE_DIR/xdg-config}"'
