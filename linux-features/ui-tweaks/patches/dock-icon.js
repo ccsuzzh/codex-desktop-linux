@@ -58,6 +58,15 @@ function countOccurrences(source, needle) {
   return source.split(needle).length - 1;
 }
 
+function hasCompleteSinglePointContract(source, currentNeedle, patchedNeedle) {
+  if (typeof source !== "string") {
+    return false;
+  }
+  const currentCount = countOccurrences(source, currentNeedle);
+  const patchedCount = countOccurrences(source, patchedNeedle);
+  return (currentCount === 1 && patchedCount === 0) || (currentCount === 0 && patchedCount === 1);
+}
+
 function dockIconConfig(context) {
   const defaults = context?.feature?.manifest?.tweaks?.appearance?.dockIcon;
   const settings = context?.feature?.settings?.tweaks?.appearance?.dockIcon;
@@ -146,7 +155,9 @@ const descriptors = [
     phase: "webview-asset",
     order: 20_950,
     ciPolicy: "optional",
-    pattern: /^general-settings-CsA3Lt9Z\.js$/,
+    pattern: /^general-settings-[A-Za-z0-9_-]+\.js$/,
+    assetMatch: (source) =>
+      hasCompleteSinglePointContract(source, currentSettingsGate, patchedSettingsGate),
     missingDescription: "General settings Dock icon bundle",
     skipDescription: "Dock icon settings row patch",
     enabled: dockIconEnabled,
@@ -157,7 +168,9 @@ const descriptors = [
     phase: "webview-asset",
     order: 20_960,
     ciPolicy: "optional",
-    pattern: /^settings-page-BOdFN1v1\.js$/,
+    pattern: /^settings-page-[A-Za-z0-9_-]+\.js$/,
+    assetMatch: (source) =>
+      hasCompleteSinglePointContract(source, currentSearchFilter, patchedSearchFilter),
     missingDescription: "Settings search bundle",
     skipDescription: "Dock icon settings search patch",
     enabled: dockIconEnabled,

@@ -1,9 +1,9 @@
 "use strict";
 
 const APP_PAGE_ASSET_PATTERN =
-  /^app-initial~app-main~appgen-settings-page~page~appgen-library-page~appgen-page~appgen-setti~ogh9jurw-CrEakH0Y\.js$/;
-const GENERAL_SETTINGS_ASSET_PATTERN = /^general-settings-CsA3Lt9Z\.js$/;
-const HOME_CONTENT_ASSET_PATTERN = /^home-ambient-suggestions-content-C01Mwmkt\.js$/;
+  /^app-initial~app-main~appgen-settings-page~page~appgen-library-page~appgen-page~appgen-setti~ogh9jurw-[A-Za-z0-9_-]+\.js$/;
+const GENERAL_SETTINGS_ASSET_PATTERN = /^general-settings-[A-Za-z0-9_-]+\.js$/;
+const HOME_CONTENT_ASSET_PATTERN = /^home-ambient-suggestions-content-[A-Za-z0-9_-]+\.js$/;
 const FEATURE_GATE_ID = "2425897452";
 const RUNTIME_MARKER = "codexLinuxUiTweaksSuggestedPromptsEnabled";
 const APP_PAGE_ELIGIBILITY_MARKER = "codexLinuxUiTweaksSuggestedPromptsAppPageEligible";
@@ -56,6 +56,55 @@ function rolloutMarkerCount(source) {
   return source.split(RUNTIME_MARKER).length - 1;
 }
 
+function suggestedPromptsAppPageContract(source) {
+  if (typeof source !== "string") {
+    return "drifted";
+  }
+  const rolloutMarkers = rolloutMarkerCount(source);
+  const eligibilityMarkers = source.split(APP_PAGE_ELIGIBILITY_MARKER).length - 1;
+  const cleanRollouts = matchCount(source, gateAssignmentPattern());
+  const cleanEligibility = matchCount(source, appPageEligibilityPattern());
+  if (rolloutMarkers === 0 && eligibilityMarkers === 0 && cleanRollouts === 2 && cleanEligibility === 1) {
+    return "current";
+  }
+  if (rolloutMarkers === 2 && eligibilityMarkers === 1 && cleanRollouts === 0 && cleanEligibility === 0) {
+    return "patched";
+  }
+  return "drifted";
+}
+
+function suggestedPromptsSettingsContract(source) {
+  if (typeof source !== "string") {
+    return "drifted";
+  }
+  const rolloutMarkers = rolloutMarkerCount(source);
+  const eligibilityMarkers = source.split(SETTINGS_ELIGIBILITY_MARKER).length - 1;
+  const cleanRollouts = matchCount(source, gateAssignmentPattern());
+  const cleanEligibility = matchCount(source, settingsEligibilityPattern());
+  if (rolloutMarkers === 0 && eligibilityMarkers === 0 && cleanRollouts === 1 && cleanEligibility === 1) {
+    return "current";
+  }
+  if (rolloutMarkers === 1 && eligibilityMarkers === 1 && cleanRollouts === 0 && cleanEligibility === 0) {
+    return "patched";
+  }
+  return "drifted";
+}
+
+function suggestedPromptsHomeContentContract(source) {
+  if (typeof source !== "string") {
+    return "drifted";
+  }
+  const markerMatches = source.split(HOME_CONTENT_SOURCE_MARKER).length - 1;
+  const cleanMatches = matchCount(source, homeContentSourcePattern());
+  if (markerMatches === 0 && cleanMatches === 1) {
+    return "current";
+  }
+  if (markerMatches === 1 && cleanMatches === 0) {
+    return "patched";
+  }
+  return "drifted";
+}
+
 function replaceRolloutGates(source) {
   return source.replace(
     gateAssignmentPattern(),
@@ -66,18 +115,11 @@ function replaceRolloutGates(source) {
 
 function applySuggestedPromptsAppPagePatch(source) {
   try {
-    const rolloutMarkers = typeof source === "string" ? rolloutMarkerCount(source) : 0;
-    const eligibilityMarkers = typeof source === "string"
-      ? source.split(APP_PAGE_ELIGIBILITY_MARKER).length - 1
-      : 0;
-    const cleanRollouts = typeof source === "string" ? matchCount(source, gateAssignmentPattern()) : 0;
-    const cleanEligibility = typeof source === "string"
-      ? matchCount(source, appPageEligibilityPattern())
-      : 0;
-    if (rolloutMarkers === 2 && eligibilityMarkers === 1 && cleanRollouts === 0 && cleanEligibility === 0) {
+    const contract = suggestedPromptsAppPageContract(source);
+    if (contract === "patched") {
       return source;
     }
-    if (rolloutMarkers !== 0 || eligibilityMarkers !== 0 || cleanRollouts !== 2 || cleanEligibility !== 1) {
+    if (contract !== "current") {
       warn("app page");
       return source;
     }
@@ -124,14 +166,11 @@ function applySuggestedPromptsMainPatch(source) {
 
 function applySuggestedPromptsHomeContentPatch(source) {
   try {
-    const markerMatches = typeof source === "string"
-      ? source.split(HOME_CONTENT_SOURCE_MARKER).length - 1
-      : 0;
-    const cleanMatches = typeof source === "string" ? matchCount(source, homeContentSourcePattern()) : 0;
-    if (markerMatches === 1 && cleanMatches === 0) {
+    const contract = suggestedPromptsHomeContentContract(source);
+    if (contract === "patched") {
       return source;
     }
-    if (markerMatches !== 0 || cleanMatches !== 1) {
+    if (contract !== "current") {
       warn("Home generated-source");
       return source;
     }
@@ -151,18 +190,11 @@ function applySuggestedPromptsHomeContentPatch(source) {
 
 function applySuggestedPromptsSettingsPatch(source) {
   try {
-    const rolloutMarkers = typeof source === "string" ? rolloutMarkerCount(source) : 0;
-    const eligibilityMarkers = typeof source === "string"
-      ? source.split(SETTINGS_ELIGIBILITY_MARKER).length - 1
-      : 0;
-    const cleanRollouts = typeof source === "string" ? matchCount(source, gateAssignmentPattern()) : 0;
-    const cleanEligibility = typeof source === "string"
-      ? matchCount(source, settingsEligibilityPattern())
-      : 0;
-    if (rolloutMarkers === 1 && eligibilityMarkers === 1 && cleanRollouts === 0 && cleanEligibility === 0) {
+    const contract = suggestedPromptsSettingsContract(source);
+    if (contract === "patched") {
       return source;
     }
-    if (rolloutMarkers !== 0 || eligibilityMarkers !== 0 || cleanRollouts !== 1 || cleanEligibility !== 1) {
+    if (contract !== "current") {
       warn("settings");
       return source;
     }
@@ -196,6 +228,7 @@ const descriptors = [
     ciPolicy: "optional",
     enabled: suggestedPromptsEnabled,
     pattern: APP_PAGE_ASSET_PATTERN,
+    assetMatch: (source) => suggestedPromptsAppPageContract(source) !== "drifted",
     missingDescription: "current Suggested Prompts app page bundle",
     skipDescription: "ui-tweaks Suggested Prompts app page patch",
     apply: applySuggestedPromptsAppPagePatch,
@@ -207,6 +240,7 @@ const descriptors = [
     ciPolicy: "optional",
     enabled: suggestedPromptsEnabled,
     pattern: GENERAL_SETTINGS_ASSET_PATTERN,
+    assetMatch: (source) => suggestedPromptsSettingsContract(source) !== "drifted",
     missingDescription: "current Suggested Prompts General settings bundle",
     skipDescription: "ui-tweaks Suggested Prompts settings row patch",
     apply: applySuggestedPromptsSettingsPatch,
@@ -218,6 +252,7 @@ const descriptors = [
     ciPolicy: "optional",
     enabled: suggestedPromptsEnabled,
     pattern: HOME_CONTENT_ASSET_PATTERN,
+    assetMatch: (source) => suggestedPromptsHomeContentContract(source) !== "drifted",
     missingDescription: "current Suggested Prompts Home content bundle",
     skipDescription: "ui-tweaks Suggested Prompts generated-source patch",
     apply: applySuggestedPromptsHomeContentPatch,
