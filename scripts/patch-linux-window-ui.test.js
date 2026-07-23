@@ -1601,7 +1601,6 @@ function linuxDesktopNavigationBundleFixture() {
     'var ye={"general-settings":q,profile:ee,"keyboard-shortcuts":ve,appearance:le};',
     "var xe=[`general-settings`,`import`,`profile`,`appearance`,`keyboard-shortcuts`];",
     "var Se=[{key:`app`,slugs:[`general-settings`,`import`,`profile`,`appearance`]},{key:`connection`,slugs:[`agent`,`keyboard-shortcuts`}]}];",
-    "function visible(e){switch(e.slug){case`appearance`:return!0;case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:return!0}}",
     "function loading(H){let W=!1;if(H)bb0:switch(H.slug){case`appearance`:case`general-settings`:case`agent`:case`git-settings`:case`data-controls`:case`personalization`:W=!1;break bb0;case`keyboard-shortcuts`:W=!1;break bb0}return W}",
   ].join("");
 }
@@ -1658,14 +1657,17 @@ function createModernNativeKeyboardShortcutsSettingsFixture() {
       'var Zn={"general-settings":Ya(async()=>(await Pr(async()=>{let{GeneralSettings:e}=await import(`./general-settings-A.js`);return{GeneralSettings:e}},[],import.meta.url)).GeneralSettings),"keyboard-shortcuts":Ya(async()=>(await Pr(async()=>{let{KeyboardShortcutsSettings:e}=await import(`./keyboard-shortcuts-settings-A.js`);return{KeyboardShortcutsSettings:e}},[],import.meta.url)).KeyboardShortcutsSettings)};',
       "var Wn=[`general-settings`,`import`,`profile`,`keyboard-shortcuts`];",
       "var Qn=[{key:`app`,slugs:[`general-settings`,`import`,`profile`,`keyboard-shortcuts`]}];",
-      "function visible(e){switch(e.slug){case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:return!0}}",
       "function loading(H){let W=!1;if(H)bb0:switch(H.slug){case`appearance`:case`general-settings`:case`agent`:case`git-settings`:case`data-controls`:case`personalization`:W=!1;break bb0;case`keyboard-shortcuts`:W=!1;break bb0}return W}",
       "export{SettingsRouteWrapper};",
     ].join(""),
   );
   writeAsset(
     "use-visible-settings-sections-A.js",
-    'var Hn={"general-settings":wt,import:it,profile:pt,"keyboard-shortcuts":xn};export{Hn};',
+    [
+      'var Hn={"general-settings":wt,import:it,profile:pt,"keyboard-shortcuts":xn};',
+      "function visible(e){switch(e.slug){case`profile`:return y;case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:return!0}}",
+      "export{Hn};",
+    ].join(""),
   );
   writeAsset(
     "app-initial~app-main~page~remote-conversation-page~new-thread-panel-page~settings-page~shared-A.js",
@@ -1759,21 +1761,24 @@ function createSplitRouteNativeKeyboardShortcutsSettingsFixture({
       "slug:`keyboard-shortcuts`;export{KeyboardShortcutsSettings};",
     ].join(""),
   );
-  // The icon/navigation bundle: no lazy route map lives here, only the slug -> icon
-  // order, group, visibility, and loading metadata. The icon map has moved into
-  // the visible-sections module in the current upstream bundle.
+  // The navigation bundle has no lazy route map and carries only the slug
+  // order, group, and loading metadata. The icon map and visibility switch
+  // live in the visible-sections module in the current upstream bundle.
   writeAsset(
     "settings-page-A.js",
     [
       "var Wn=[`general-settings`,`import`,`profile`,`keyboard-shortcuts`];",
       "var Qn=[{key:`app`,slugs:[`general-settings`,`import`,`profile`,`keyboard-shortcuts`]}];",
-      "function visible(e){switch(e.slug){case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:return!0}}",
       "function loading(H){let W=!1;if(H)bb0:switch(H.slug){case`appearance`:case`general-settings`:case`agent`:case`git-settings`:case`data-controls`:case`personalization`:W=!1;break bb0;case`keyboard-shortcuts`:W=!1;break bb0}return W}",
     ].join(""),
   );
   writeAsset(
     "use-visible-settings-sections-A.js",
-    'var Hn={"general-settings":wt,import:it,profile:pt,"keyboard-shortcuts":xn};export{Hn};',
+    [
+      'var Hn={"general-settings":wt,import:it,profile:pt,"keyboard-shortcuts":xn};',
+      "function visible(e){switch(e.slug){case`profile`:return y;case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:return!0}}",
+      "export{Hn};",
+    ].join(""),
   );
   // The hoisted async route map is assigned inside an IIFE body.
   writeAsset(
@@ -6059,7 +6064,6 @@ test("adds Linux desktop settings when the lazy route map is hoisted into a sepa
     assert.doesNotMatch(settingsPageSource, /codexLinuxDesktopSettings/);
     assert.match(settingsPageSource, /=\[`general-settings`,`linux-desktop`,`import`,`profile`/);
     assert.match(settingsPageSource, /slugs:\[`general-settings`,`linux-desktop`,`import`,`profile`/);
-
     const visibleSectionsSource = fs.readFileSync(
       path.join(assetsDir, "use-visible-settings-sections-A.js"),
       "utf8",
@@ -6067,6 +6071,10 @@ test("adds Linux desktop settings when the lazy route map is hoisted into a sepa
     assert.match(
       visibleSectionsSource,
       /Hn=\{"linux-desktop":wt,"general-settings":wt,import:it,profile:pt,"keyboard-shortcuts":xn\}/,
+    );
+    assert.match(
+      visibleSectionsSource,
+      /case`linux-desktop`:return!0;case`general-settings`:case`agent`:case`personalization`:return!0/,
     );
 
     // The lazy route is registered in the hoisted app chunk, reusing the bundle's
@@ -6196,6 +6204,91 @@ test("adds Linux desktop section to current native Keyboard Shortcuts sections b
 
   assert.match(patched, /e=\[`general-settings`,`linux-desktop`,`profile`,`keyboard-shortcuts`/);
   assert.match(patched, /r=\[\{slug:`general-settings`\},\{slug:`linux-desktop`\},\{slug:`profile`\}/);
+});
+
+test("skips Linux desktop settings when the current visibility asset drifts", () => {
+  const { extractedDir, assetsDir } = createSplitRouteNativeKeyboardShortcutsSettingsFixture();
+  try {
+    const visibilityPath = path.join(assetsDir, "use-visible-settings-sections-A.js");
+    fs.writeFileSync(
+      visibilityPath,
+      fs.readFileSync(visibilityPath, "utf8").replace(
+        "case`general-settings`:case`agent`:case`personalization`:return!0;",
+        "case`general-settings`:return isGeneralSettingsVisible;",
+      ),
+      "utf8",
+    );
+
+    const { value: result, warnings } = captureWarns(() => patchKeybindsSettingsAssets(extractedDir));
+
+    assert.equal(result.matched, false);
+    assert.equal(result.changed, 0);
+    assert.match(result.reason, /exactly one current settings visibility asset \(found 0\)/);
+    assert.ok(warnings.some((warning) => warning.includes(result.reason)));
+    assert.equal(fs.existsSync(path.join(assetsDir, linuxDesktopSettingsAsset)), false);
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(extractedDir, { report }));
+    const reportEntry = report.patches.find((patch) => patch.name === "keybinds-settings");
+    assert.equal(reportEntry.status, "skipped-optional");
+    assert.match(reportEntry.reason, /exactly one current settings visibility asset \(found 0\)/);
+  } finally {
+    fs.rmSync(extractedDir, { recursive: true, force: true });
+  }
+});
+
+test("skips Linux desktop settings when current visibility discovery is ambiguous", () => {
+  const { extractedDir, assetsDir } = createSplitRouteNativeKeyboardShortcutsSettingsFixture();
+  try {
+    fs.copyFileSync(
+      path.join(assetsDir, "use-visible-settings-sections-A.js"),
+      path.join(assetsDir, "use-visible-settings-sections-B.js"),
+    );
+
+    const { value: result, warnings } = captureWarns(() => patchKeybindsSettingsAssets(extractedDir));
+
+    assert.equal(result.matched, false);
+    assert.equal(result.changed, 0);
+    assert.match(result.reason, /exactly one current settings visibility asset \(found 2\)/);
+    assert.ok(warnings.some((warning) => warning.includes(result.reason)));
+    assert.equal(fs.existsSync(path.join(assetsDir, linuxDesktopSettingsAsset)), false);
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(extractedDir, { report }));
+    const reportEntry = report.patches.find((patch) => patch.name === "keybinds-settings");
+    assert.equal(reportEntry.status, "skipped-optional");
+    assert.match(reportEntry.reason, /exactly one current settings visibility asset \(found 2\)/);
+  } finally {
+    fs.rmSync(extractedDir, { recursive: true, force: true });
+  }
+});
+
+test("skips Linux desktop settings when the current visibility asset has multiple matches", () => {
+  const { extractedDir, assetsDir } = createSplitRouteNativeKeyboardShortcutsSettingsFixture();
+  try {
+    const visibilityPath = path.join(assetsDir, "use-visible-settings-sections-A.js");
+    fs.appendFileSync(
+      visibilityPath,
+      "function duplicateVisible(e){switch(e.slug){case`general-settings`:case`agent`:return!0;case`keyboard-shortcuts`:return!0}}",
+      "utf8",
+    );
+
+    const { value: result, warnings } = captureWarns(() => patchKeybindsSettingsAssets(extractedDir));
+
+    assert.equal(result.matched, false);
+    assert.equal(result.changed, 0);
+    assert.match(result.reason, /exactly one current settings visibility match \(found 2, 0 already patched\)/);
+    assert.ok(warnings.some((warning) => warning.includes(result.reason)));
+    assert.equal(fs.existsSync(path.join(assetsDir, linuxDesktopSettingsAsset)), false);
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(extractedDir, { report }));
+    const reportEntry = report.patches.find((patch) => patch.name === "keybinds-settings");
+    assert.equal(reportEntry.status, "skipped-optional");
+    assert.match(reportEntry.reason, /exactly one current settings visibility match \(found 2, 0 already patched\)/);
+  } finally {
+    fs.rmSync(extractedDir, { recursive: true, force: true });
+  }
 });
 
 test("adds Linux desktop section to split current section metadata bundle", () => {

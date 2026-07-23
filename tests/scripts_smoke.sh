@@ -6353,11 +6353,19 @@ for name in (
     "path_has_unsafe_write",
     "tree_has_unsafe_write",
     "remove_tree_if_exists",
+    "chrome_extension_host_arch",
 ):
     match = re.search(rf"{name}\(\) \{{[\s\S]*?\n\}}\n", launcher)
     if match is None:
         raise SystemExit(f"missing {name}")
     helpers.append(match.group(0))
+
+native_launcher = re.search(
+    r"write_chrome_native_host_launcher\(\) \{[\s\S]*?\n\}\n",
+    launcher,
+)
+if native_launcher is not None:
+    helpers.append(native_launcher.group(0))
 
 sync_match = re.search(
     r"sync_chrome_bundled_plugin_cache\(\) \{[\s\S]*?\n\}\n\nsync_computer_use_bundled_plugin_cache\(\)",
@@ -6384,26 +6392,52 @@ source_plugin="$SCRIPT_DIR/resources/plugins/openai-bundled/plugins/chrome"
 cache_root="$CODEX_HOME/plugins/cache/openai-bundled/chrome"
 cache_plugin="$cache_root/26.test"
 
-chrome_extension_host_arch() { printf '%s\n' x64; }
 bundled_plugin_version() { printf '%s\n' 26.test; }
 replace_symlink() { ln -sfnT "$1" "$2"; }
-write_chrome_native_host_manifests() { :; }
+write_chrome_native_host_manifests() { printf '%s\n' "$1" > "$root/native-host-path"; }
 
 mkdir -p \
   "$source_plugin/.codex-plugin" \
   "$source_plugin/extension-host/linux/x64" \
+  "$source_plugin/extension-host/linux/arm64" \
   "$source_plugin/scripts/node_modules" \
   "$cache_plugin/.codex-plugin" \
   "$cache_plugin/extension-host/linux/x64" \
+  "$cache_plugin/extension-host/linux/arm64" \
   "$cache_plugin/scripts/node_modules"
 printf '%s\n' '{"name":"chrome","version":"26.test"}' > "$source_plugin/.codex-plugin/plugin.json"
-printf '%s\n' trusted-host > "$source_plugin/extension-host/linux/x64/extension-host"
+cat > "$source_plugin/extension-host/linux/x64/extension-host" <<'HOST'
+#!/usr/bin/env bash
+printf '%s\n' ARCH=x64
+printf '%s\n' \
+  "${HTTP_PROXY-}" "${HTTPS_PROXY-}" "${ALL_PROXY-}" \
+  "${http_proxy-}" "${https_proxy-}" "${all_proxy-}" \
+  "${NO_PROXY-}" "${no_proxy-}"
+HOST
+cat > "$source_plugin/extension-host/linux/arm64/extension-host" <<'HOST'
+#!/usr/bin/env bash
+printf '%s\n' ARCH=arm64
+printf '%s\n' \
+  "${HTTP_PROXY-}" "${HTTPS_PROXY-}" "${ALL_PROXY-}" \
+  "${http_proxy-}" "${https_proxy-}" "${all_proxy-}" \
+  "${NO_PROXY-}" "${no_proxy-}"
+HOST
 printf '%s\n' trusted-client > "$source_plugin/scripts/browser-client.mjs"
 printf '%s\n' trusted-manifest > "$source_plugin/scripts/installManifest.mjs"
 printf '%s\n' trusted-module > "$source_plugin/scripts/node_modules/classic-level.mjs"
-chmod +x "$source_plugin/extension-host/linux/x64/extension-host"
+chmod +x \
+  "$source_plugin/extension-host/linux/x64/extension-host" \
+  "$source_plugin/extension-host/linux/arm64/extension-host"
 cp -R "$source_plugin/." "$cache_plugin/"
 printf '%s\n' tampered-module > "$cache_plugin/scripts/node_modules/classic-level.mjs"
+printf '%s\n' untouched > "$root/predictable-temp-target"
+ln -s "$root/predictable-temp-target" "$cache_root/native-host.tmp.$$"
+cat > "$cache_root/native-host" <<'HOST'
+#!/usr/bin/env bash
+CODEX_CHROME_NATIVE_HOST_LAUNCHER_V1=1
+printf '%s\n' PRESEEDED_PAYLOAD
+HOST
+chmod 0755 "$cache_root/native-host"
 
 # Simulate a cache and relevant ancestor created under umask 0002. The four
 # files used by the old partial comparison still match, while an imported
@@ -6433,6 +6467,222 @@ if find "$cache_plugin" ! -type l -perm /022 -print -quit | grep -q .; then
 fi
 test -L "$cache_root/latest"
 test "$(readlink "$cache_root/latest")" = 26.test
+grep -qx untouched "$root/predictable-temp-target"
+if grep -q PRESEEDED_PAYLOAD "$cache_root/native-host"; then
+  echo "Chrome native host launcher retained a pre-seeded executable" >&2
+  exit 1
+fi
+
+rm -f "$cache_root/native-host"
+mkdir "$cache_root/native-host"
+printf '%s\n' PRESEEDED_DIRECTORY_PAYLOAD > "$cache_root/native-host/payload"
+native_host_path="$(write_chrome_native_host_launcher "$cache_root")"
+test -f "$native_host_path"
+if grep -q PRESEEDED_DIRECTORY_PAYLOAD "$native_host_path"; then
+  echo "Chrome native host launcher retained a pre-seeded directory" >&2
+  exit 1
+fi
+
+native_host_path="$(cat "$root/native-host-path")"
+stub_bin="$root/stub-bin"
+mkdir -p "$stub_bin"
+cat > "$stub_bin/uname" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "${STUB_UNAME_MACHINE:-x86_64}"
+STUB
+cat > "$stub_bin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' \
+  'HTTP_PROXY=http://127.0.0.1:7897' \
+  'HTTPS_PROXY=http://127.0.0.1:7897' \
+  'ALL_PROXY=socks5://127.0.0.1:7897/' \
+  'http_proxy=http://127.0.0.1:7897' \
+  'https_proxy=http://127.0.0.1:7897' \
+  'all_proxy=socks5://127.0.0.1:7897/' \
+  'NO_PROXY=localhost,127.0.0.0/8' \
+  'no_proxy=localhost,127.0.0.0/8'
+STUB
+cat > "$stub_bin/gsettings" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+chmod 0755 "$stub_bin/uname" "$stub_bin/systemctl" "$stub_bin/gsettings"
+
+proxy_output="$(env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+  -u http_proxy -u https_proxy -u all_proxy -u NO_PROXY -u no_proxy \
+  STUB_UNAME_MACHINE=x86_64 \
+  PATH="$stub_bin:$PATH" "$native_host_path")"
+test "$proxy_output" = "$(printf '%s\n' \
+  'ARCH=x64' \
+  'http://127.0.0.1:7897' \
+  'http://127.0.0.1:7897' \
+  'socks5://127.0.0.1:7897/' \
+  'http://127.0.0.1:7897' \
+  'http://127.0.0.1:7897' \
+  'socks5://127.0.0.1:7897/' \
+  'localhost,127.0.0.0/8' \
+  'localhost,127.0.0.0/8')"
+
+cat > "$stub_bin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' \
+  'HTTP_PROXY=http://manager.invalid:8080' \
+  'http_proxy=http://stale.invalid:8080' \
+  'HTTPS_PROXY=http://127.0.0.1:7897' \
+  'ALL_PROXY=socks5://127.0.0.1:7897/' \
+  'NO_PROXY=localhost'
+STUB
+cat > "$stub_bin/gsettings" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+chmod 0755 "$stub_bin/systemctl" "$stub_bin/gsettings"
+
+proxy_output="$(env -u HTTPS_PROXY -u ALL_PROXY -u NO_PROXY \
+  -u http_proxy -u https_proxy -u all_proxy -u no_proxy \
+  HTTP_PROXY=http://inherited.example:3128 \
+  STUB_UNAME_MACHINE=x86_64 \
+  PATH="$stub_bin:$PATH" "$native_host_path")"
+test "$proxy_output" = "$(printf '%s\n' \
+  'ARCH=x64' \
+  'http://inherited.example:3128' \
+  'http://127.0.0.1:7897' \
+  'socks5://127.0.0.1:7897/' \
+  'http://inherited.example:3128' \
+  'http://127.0.0.1:7897' \
+  'socks5://127.0.0.1:7897/' \
+  'localhost' \
+  'localhost')"
+
+cat > "$stub_bin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+cat > "$stub_bin/gsettings" <<'STUB'
+#!/usr/bin/env bash
+case "$2:$3" in
+  org.gnome.system.proxy:mode) printf "'manual'\n" ;;
+  org.gnome.system.proxy:use-same-proxy) printf 'true\n' ;;
+  org.gnome.system.proxy:ignore-hosts) printf "['localhost', '127.0.0.0/8']\n" ;;
+  org.gnome.system.proxy.http:host) printf "'127.0.0.1'\n" ;;
+  org.gnome.system.proxy.http:port) printf '7897\n' ;;
+  *) exit 1 ;;
+esac
+STUB
+chmod 0755 "$stub_bin/systemctl" "$stub_bin/gsettings"
+
+proxy_output="$(env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+  -u http_proxy -u https_proxy -u all_proxy -u NO_PROXY -u no_proxy \
+  STUB_UNAME_MACHINE=aarch64 \
+  PATH="$stub_bin:$PATH" "$native_host_path")"
+test "$proxy_output" = "$(printf '%s\n' \
+  'ARCH=arm64' \
+  'http://127.0.0.1:7897' \
+  'http://127.0.0.1:7897' \
+  'http://127.0.0.1:7897' \
+  'http://127.0.0.1:7897' \
+  'http://127.0.0.1:7897' \
+  'http://127.0.0.1:7897' \
+  'localhost,127.0.0.0/8' \
+  'localhost,127.0.0.0/8')"
+
+cat > "$stub_bin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+cat > "$stub_bin/gsettings" <<'STUB'
+#!/usr/bin/env bash
+case "$2:$3" in
+  org.gnome.system.proxy:mode) printf "'manual'\n" ;;
+  org.gnome.system.proxy:use-same-proxy) printf 'false\n' ;;
+  org.gnome.system.proxy:ignore-hosts) printf "['example.internal']\n" ;;
+  org.gnome.system.proxy.http:host) printf "'192.0.2.10'\n" ;;
+  org.gnome.system.proxy.http:port) printf '8080\n' ;;
+  org.gnome.system.proxy.https:host) printf "'2001:db8::11'\n" ;;
+  org.gnome.system.proxy.https:port) printf '8443\n' ;;
+  org.gnome.system.proxy.socks:host) printf "'::1'\n" ;;
+  org.gnome.system.proxy.socks:port) printf '1080\n' ;;
+  *) exit 1 ;;
+esac
+STUB
+chmod 0755 "$stub_bin/systemctl" "$stub_bin/gsettings"
+
+proxy_output="$(env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+  -u http_proxy -u https_proxy -u all_proxy -u NO_PROXY -u no_proxy \
+  STUB_UNAME_MACHINE=x86_64 \
+  PATH="$stub_bin:$PATH" "$native_host_path")"
+test "$proxy_output" = "$(printf '%s\n' \
+  'ARCH=x64' \
+  'http://192.0.2.10:8080' \
+  'http://[2001:db8::11]:8443' \
+  'socks5://[::1]:1080/' \
+  'http://192.0.2.10:8080' \
+  'http://[2001:db8::11]:8443' \
+  'socks5://[::1]:1080/' \
+  'example.internal' \
+  'example.internal')"
+
+cat > "$stub_bin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' 'HTTP_PROXY=http://partial.invalid:9999'
+trap 'exit 0' TERM
+(
+  trap '' TERM
+  printf '%s\n' "$BASHPID" > "${PROBE_CHILD_PID_FILE:?}"
+  exec sleep 5
+) &
+wait
+STUB
+cat > "$stub_bin/gsettings" <<'STUB'
+#!/usr/bin/env bash
+sleep 5
+STUB
+chmod 0755 "$stub_bin/systemctl" "$stub_bin/gsettings"
+
+probe_child_pid_file="$root/probe-child-pid"
+started_at="$(date +%s)"
+proxy_output="$(env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+  -u http_proxy -u https_proxy -u all_proxy -u NO_PROXY -u no_proxy \
+  PROBE_CHILD_PID_FILE="$probe_child_pid_file" \
+  STUB_UNAME_MACHINE=aarch64 \
+  PATH="$stub_bin:$PATH" "$native_host_path")"
+elapsed="$(( $(date +%s) - started_at ))"
+if [ "$elapsed" -ge 4 ]; then
+  echo "Chrome native host proxy probes exceeded their fail-soft deadline" >&2
+  exit 1
+fi
+test "$proxy_output" = 'ARCH=arm64'
+probe_child_pid="$(cat "$probe_child_pid_file")"
+if kill -0 "$probe_child_pid" 2>/dev/null; then
+  echo "Chrome native host proxy watchdog left a TERM-resistant child running" >&2
+  exit 1
+fi
+
+no_setsid_bin="$root/no-setsid-bin"
+mkdir -p "$no_setsid_bin"
+ln -s "$(type -P bash)" "$no_setsid_bin/bash"
+ln -s "$(type -P dirname)" "$no_setsid_bin/dirname"
+cat > "$no_setsid_bin/uname" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' x86_64
+STUB
+cat > "$no_setsid_bin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' called > "${PROBE_CALLED_FILE:?}"
+STUB
+cat > "$no_setsid_bin/gsettings" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' called > "${PROBE_CALLED_FILE:?}"
+STUB
+chmod 0755 "$no_setsid_bin/uname" "$no_setsid_bin/systemctl" "$no_setsid_bin/gsettings"
+
+probe_called_file="$root/probe-called-without-setsid"
+proxy_output="$(env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+  -u http_proxy -u https_proxy -u all_proxy -u NO_PROXY -u no_proxy \
+  PROBE_CALLED_FILE="$probe_called_file" \
+  PATH="$no_setsid_bin" "$native_host_path")"
+test "$proxy_output" = 'ARCH=x64'
+test ! -e "$probe_called_file"
 '''
 )
 PY
@@ -8711,10 +8961,10 @@ JS
 import{t as d}from"./jsx-runtime-test.js";var c={"general-settings":{id:`settings.nav.general-settings`,defaultMessage:`General`,description:`Title for general settings section`},"keyboard-shortcuts":{id:`settings.nav.keyboard-shortcuts`,defaultMessage:`Keyboard shortcuts`,description:`Title for keyboard shortcuts settings section`}};function m(e){let t=(0,u.c)(17),{slug:r}=e;switch(r){case`keyboard-shortcuts`:{let e;return t[1]===Symbol.for(`react.memo_cache_sentinel`)?(e=(0,d.jsx)(n,{id:`settings.section.keyboard-shortcuts`,defaultMessage:`Keyboard shortcuts`,description:`Title for keyboard shortcuts settings section`}),t[1]=e):e=t[1],e}case`general-settings`:{let e;return t[2]===Symbol.for(`react.memo_cache_sentinel`)?(e=(0,d.jsx)(n,{id:`settings.section.general-settings`,defaultMessage:`General`,description:`Title for general settings section`}),t[2]=e):e=t[2],e}}}
 JS
     cat > "$extracted/webview/assets/use-visible-settings-sections-test.js" <<'JS'
-var Xge={"general-settings":xh,"keyboard-shortcuts":ks,appearance:Pf,agent:gU};
+var Xge={"general-settings":xh,"keyboard-shortcuts":ks,appearance:Pf,agent:gU};function n_e(){let e=e=>{switch(e.slug){case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:return!0}}}
 JS
     cat > "$extracted/webview/assets/index-test.js" <<'JS'
-import{n as routeModule,s as routeToESM}from"./rolldown-runtime-test.js";import{I as routeJsxFactory,R as routeReactFactory}from"./shared-runtime-test.js";function Z(e){let r=(0,RouteReact.lazy)(e);function SettingsRouteWrapper(){let t=(0,RouteReact.useState)(null);return (0,RouteJsx.jsx)(r,{children:t})}return SettingsRouteWrapper}var RouteReact,RouteJsx;routeModule(()=>{RouteReact=routeToESM(routeReactFactory(),1),RouteJsx=routeJsxFactory()})();var H7={},Zge=[`general-settings`,`import`,`profile`,`keyboard-shortcuts`,`appearance`,`agent`,`personalization`,`mcp-settings`,`connections`,`git-settings`,`local-environments`,`worktrees`,`browser-use`,`computer-use`,`data-controls`],Qge=[{key:`app`,heading:H7.appHeading,slugs:[`general-settings`,`import`,`profile`,`keyboard-shortcuts`,`appearance`,`connections`,`git-settings`,`usage`]}];function n_e(){let e=e=>{switch(e.slug){case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:return!0}};if(O)bb0:switch(D.slug){case`usage`:k=g;break bb0;case`appearance`:case`general-settings`:case`agent`:case`git-settings`:case`account`:case`data-controls`:case`personalization`:k=!1;break bb0;case`keyboard-shortcuts`:k=!1;break bb0;}}function s_e(e){let{slug:n}=e,r=c_e[n];return (0,$.jsx)(r,{})}var c_e={"general-settings":Z(async()=>(await s(async()=>{let{GeneralSettings:e}=await import(`./general-settings-DZbwMmWz.js`);return{GeneralSettings:e}},[],import.meta.url)).GeneralSettings),"keyboard-shortcuts":Z(async()=>(await s(async()=>{let{KeyboardShortcutsSettings:e}=await import(`./keyboard-shortcuts-settings-test.js`);return{KeyboardShortcutsSettings:e}},[],import.meta.url)).KeyboardShortcutsSettings)};export{Z};
+import{n as routeModule,s as routeToESM}from"./rolldown-runtime-test.js";import{I as routeJsxFactory,R as routeReactFactory}from"./shared-runtime-test.js";function Z(e){let r=(0,RouteReact.lazy)(e);function SettingsRouteWrapper(){let t=(0,RouteReact.useState)(null);return (0,RouteJsx.jsx)(r,{children:t})}return SettingsRouteWrapper}var RouteReact,RouteJsx;routeModule(()=>{RouteReact=routeToESM(routeReactFactory(),1),RouteJsx=routeJsxFactory()})();var H7={},Zge=[`general-settings`,`import`,`profile`,`keyboard-shortcuts`,`appearance`,`agent`,`personalization`,`mcp-settings`,`connections`,`git-settings`,`local-environments`,`worktrees`,`browser-use`,`computer-use`,`data-controls`],Qge=[{key:`app`,heading:H7.appHeading,slugs:[`general-settings`,`import`,`profile`,`keyboard-shortcuts`,`appearance`,`connections`,`git-settings`,`usage`]}];function n_e(){if(O)bb0:switch(D.slug){case`usage`:k=g;break bb0;case`appearance`:case`general-settings`:case`agent`:case`git-settings`:case`account`:case`data-controls`:case`personalization`:k=!1;break bb0;case`keyboard-shortcuts`:k=!1;break bb0;}}function s_e(e){let{slug:n}=e,r=c_e[n];return (0,$.jsx)(r,{})}var c_e={"general-settings":Z(async()=>(await s(async()=>{let{GeneralSettings:e}=await import(`./general-settings-DZbwMmWz.js`);return{GeneralSettings:e}},[],import.meta.url)).GeneralSettings),"keyboard-shortcuts":Z(async()=>(await s(async()=>{let{KeyboardShortcutsSettings:e}=await import(`./keyboard-shortcuts-settings-test.js`);return{KeyboardShortcutsSettings:e}},[],import.meta.url)).KeyboardShortcutsSettings)};export{Z};
 JS
     cat > "$extracted/webview/assets/keyboard-shortcuts-settings-test.js" <<'JS'
 import{s as __toESM}from"./chunk-test.js";import{t as __reactFactory}from"./react-test.js";import{t as __jsxFactory}from"./jsx-runtime-test.js";function KeyboardShortcutsSettings(){let t=(0,React.useState)(null);return (0,$.jsx)(`div`,{children:t})}var React,$;initialize(()=>{React=__toESM(__reactFactory(),1),$=__jsxFactory()})();slug:`keyboard-shortcuts`;export{KeyboardShortcutsSettings};
@@ -8743,6 +8993,7 @@ JS
     assert_contains "$extracted/webview/assets/settings-shared-test.js" "settings.nav.linux-desktop"
     assert_contains "$extracted/webview/assets/settings-shared-test.js" "settings.section.linux-desktop"
     assert_contains "$extracted/webview/assets/use-visible-settings-sections-test.js" '"linux-desktop":xh,"general-settings":xh'
+    assert_contains "$extracted/webview/assets/use-visible-settings-sections-test.js" 'case`linux-desktop`:return!0;case`general-settings`'
     assert_contains "$extracted/webview/assets/index-test.js" "linux-desktop-settings-linux.js?v="
     assert_contains "$extracted/webview/assets/index-test.js" 'export{Z,'
     assert_contains "$extracted/webview/assets/index-test.js" 'RouteReact as codexLinuxReact,RouteJsx as codexLinuxJsx'
@@ -8757,6 +9008,7 @@ JS
     assert_occurrence_count "$extracted/webview/assets/settings-shared-test.js" "settings.nav.linux-desktop" '1'
     assert_occurrence_count "$extracted/webview/assets/settings-shared-test.js" "settings.section.linux-desktop" '1'
     assert_occurrence_count "$extracted/webview/assets/use-visible-settings-sections-test.js" '"linux-desktop"' '1'
+    assert_occurrence_count "$extracted/webview/assets/use-visible-settings-sections-test.js" 'case`linux-desktop`' '1'
     assert_occurrence_count "$extracted/webview/assets/index-test.js" "linux-desktop-settings-linux.js" '1'
 }
 
