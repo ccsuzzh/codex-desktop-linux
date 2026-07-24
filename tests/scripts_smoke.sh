@@ -163,7 +163,7 @@ JSON
 {"name":"browser","version":"0.1.0-alpha2","interface":{"category":"Engineering"}}
 JSON
     cat > "$resources_dir/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" <<'JS'
-function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}function th(){let e=import.meta.__codexNativePipe;return e==null||typeof e.createConnection!="function"?null:e}var I2=new Set(["about:blank"]);function Gb(e){if(I2.has(e))return!0;let t;try{t=new URL(e)}catch{return!1}return t.protocol==="http:"||t.protocol==="https:"}class Uf{async fetchBlocked(e,t){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`${t} cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}}var kE=t=>t==="win32"?"\\\\.\\pipe\\codex-browser-use":"/tmp/codex-browser-use";var Cb=kE(hV.platform()),EV=()=>_P()==="win32"?TV():CV(),CV=async()=>(await yP(Cb)).map(e=>wP.resolve(Cb,e)),TV=async()=>[];export function setupAtlasRuntime() {}
+import{env as Ub}from"node:process";function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}function Me(){let e=globalThis.nodeRepl;return e?.config==null?void 0:e}function th(){let e=import.meta.__codexNativePipe;return e==null||typeof e.createConnection!="function"?null:e}var I2=new Set(["about:blank"]);function Gb(e){if(I2.has(e))return!0;let t;try{t=new URL(e)}catch{return!1}return t.protocol==="http:"||t.protocol==="https:"}class Uf{async fetchBlocked(e,t){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`${t} cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}}var kE=t=>t==="win32"?"\\\\.\\pipe\\codex-browser-use":"/tmp/codex-browser-use";var Cb=kE(hV.platform()),EV=()=>_P()==="win32"?TV():CV(),CV=async()=>(await yP(Cb)).map(e=>wP.resolve(Cb,e)),TV=async()=>[];export function setupAtlasRuntime() {return Ub.XDG_CONFIG_HOME}
 JS
 }
 
@@ -4176,7 +4176,7 @@ SCRIPT
 }
 
 test_launcher_uses_private_default_tmpdir() {
-    info "Checking launcher default TMPDIR isolation"
+    info "Checking launcher disk-backed default TMPDIR isolation"
     local workspace="$TMP_DIR/launcher-private-tmpdir"
     local probe="$workspace/probe.sh"
     local output="$workspace/output.log"
@@ -4203,14 +4203,16 @@ SCRIPT
     chmod +x "$probe"
 
     env -u TMPDIR XDG_RUNTIME_DIR="$runtime_dir" bash "$probe" > "$output"
-    [ "$(cat "$output")" = "$runtime_dir/codex-desktop/tmp" ] \
-        || fail "Expected runtime-scoped default TMPDIR, got: $(cat "$output")"
-    [ "$(stat -c '%a' "$runtime_dir/codex-desktop/tmp")" = "700" ] \
-        || fail "Expected runtime-scoped TMPDIR mode 700"
+    [ "$(cat "$output")" = "$state_dir/tmp" ] \
+        || fail "Expected state-scoped default TMPDIR, got: $(cat "$output")"
+    [ "$(stat -c '%a' "$state_dir/tmp")" = "700" ] \
+        || fail "Expected state-scoped TMPDIR mode 700"
+    [ ! -e "$runtime_dir/codex-desktop/tmp" ] \
+        || fail "Default TMPDIR must not consume XDG_RUNTIME_DIR tmpfs"
 
     env -u TMPDIR -u XDG_RUNTIME_DIR bash "$probe" > "$output"
     [ "$(cat "$output")" = "$state_dir/tmp" ] \
-        || fail "Expected state-scoped fallback TMPDIR, got: $(cat "$output")"
+        || fail "Expected state-scoped default TMPDIR without XDG_RUNTIME_DIR, got: $(cat "$output")"
 
     TMPDIR="$custom_tmp" XDG_RUNTIME_DIR="$runtime_dir" bash "$probe" > "$output"
     [ "$(cat "$output")" = "$custom_tmp" ] \
@@ -5392,6 +5394,16 @@ if 'configure_multi_launch_instance "$@"' not in source:
     raise SystemExit("launcher must configure multi-launch before deriving WEBVIEW_ORIGIN")
 if 'unset CODEX_LINUX_MULTI_LAUNCH' not in source.split('parse_launcher_args() {', 1)[0]:
     raise SystemExit("launcher must clear inherited internal multi-launch markers before parsing args")
+multi_launch_prefix = source.split('parse_launcher_args() {', 1)[0]
+multi_launch_capture = 'CODEX_MULTI_LAUNCH_REQUEST="${CODEX_MULTI_LAUNCH:-}"'
+if multi_launch_capture not in multi_launch_prefix:
+    raise SystemExit("launcher must capture the public multi-launch request for the current invocation")
+if multi_launch_prefix.index(multi_launch_capture) > multi_launch_prefix.index("unset CODEX_MULTI_LAUNCH"):
+    raise SystemExit("launcher must capture the public multi-launch request before clearing it")
+if 'early_truthy_env_value "$CODEX_MULTI_LAUNCH_REQUEST"' not in source.split("parse_launcher_args() {", 1)[1].split("configure_multi_launch_instance() {", 1)[0]:
+    raise SystemExit("launcher must parse multi-launch from the one-shot request snapshot")
+if "unset CODEX_MULTI_LAUNCH" not in multi_launch_prefix:
+    raise SystemExit("launcher must not leak the public multi-launch request into Electron descendants")
 if '$((CODEX_LINUX_WEBVIEW_PORT + 4))' not in source:
     raise SystemExit("multi-launch default range must cap the default at five ports")
 if '( trap - EXIT\n      exec 3<>/dev/tcp/127.0.0.1/"$CODEX_LINUX_WEBVIEW_PORT" || exit 1\n      exec 3>&- 3<&-\n      exit 0 )' not in webview_probe_body:
@@ -7624,8 +7636,12 @@ test_browser_plugin_renamed_upstream_staging() {
 
     assert_file_exists "$browser_dir/scripts/browser-client.mjs"
     assert_contains "$browser_dir/.codex-plugin/plugin.json" '"name":"browser"'
+    assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxBrowserUseProcessEnv"
+    assert_not_contains "$browser_dir/scripts/browser-client.mjs" '"node:process"'
     assert_contains "$browser_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env?.\[e\]'
     assert_not_contains "$browser_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env\[e\]'
+    assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxBrowserUseDefineNodeReplMethod"
+    assert_contains "$browser_dir/scripts/browser-client.mjs" "addAfterSubmittedCodeHook"
     assert_contains "$browser_dir/scripts/browser-client.mjs" "nativePipe??import.meta.__codexNativePipe"
     assert_not_contains "$browser_dir/scripts/browser-client.mjs" "let e=import.meta.__codexNativePipe;return"
     assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
@@ -8286,7 +8302,7 @@ const browserPreference={};function preferredWindowIdFor(){}function getForUrl()
 var kE=t=>t==="win32"?"\\\\.\\pipe\\codex-browser-use":"/tmp/codex-browser-use";var Cb=kE(hV.platform()),EV=()=>_P()==="win32"?TV():CV(),CV=async()=>(await yP(Cb)).map(e=>wP.resolve(Cb,e)),TV=async()=>[];
 function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}
 function Me(){let e=globalThis.nodeRepl;return e?.config==null?void 0:e}
-import{platform as yT}from"node:os";function eh(){return"privileged native pipe bridge is not available; browser-client is not trusted"}function th(){let e=globalThis.nodeRepl?.nativePipe;return e==null||typeof e.createConnection!="function"?null:e}var ml=class e{constructor(t){this.socket=t}static async create(t){let r=th();if(r!=null){let n=await r.createConnection(t);return new e(n)}throw new Error(eh())}};
+import{platform as yT}from"node:os";import{env as Ub}from"node:process";function eh(){return"privileged native pipe bridge is not available; browser-client is not trusted"}function th(){let e=globalThis.nodeRepl?.nativePipe;return e==null||typeof e.createConnection!="function"?null:e}var ml=class e{constructor(t){this.socket=t}static async create(t){let r=th();if(r!=null){let n=await r.createConnection(t);return new e(n)}throw new Error(eh())}};var chromeConfigHome=Ub.CHROME_CONFIG_HOME;
 async fetchBlocked(e,t){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`${t} cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}
 JS
     cat > "$chrome_dir/scripts/check-native-host-manifest.js" <<'JS'
@@ -8467,6 +8483,8 @@ test_chrome_plugin_staging() {
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "browserPreference"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "preferredWindowIdFor"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "getForUrl"
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxBrowserUseProcessEnv"
+    assert_not_contains "$chrome_dir/scripts/browser-client.mjs" '"node:process"'
     assert_contains "$chrome_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env?.\[e\]'
     assert_not_contains "$chrome_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env\[e\]'
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxBrowserUseConfigShim"
@@ -8476,6 +8494,8 @@ test_chrome_plugin_staging() {
     assert_not_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxBrowserUseStringifyToml"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" 'Object.getPrototypeOf(repl)'
     assert_contains "$chrome_dir/scripts/browser-client.mjs" 'Object.defineProperty(prototype, "config"'
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxBrowserUseDefineNodeReplMethod"
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "addAfterSubmittedCodeHook"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxBrowserUseConfigShim();let e=globalThis.nodeRepl"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "nativePipe??import.meta.__codexNativePipe"
     assert_not_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxNativePipeFallback"
@@ -8611,7 +8631,7 @@ make_fake_extracted_asar() {
     printf 'import{t as e}from"./chunk-test.js";Symbol.for(`react.transitional.element`);export{e as t};\n' > "$root/webview/assets/react-test.js"
     printf 'import{t as e}from"./chunk-test.js";Symbol.for(`react.transitional.element`);export{e as t};\n' > "$root/webview/assets/jsx-runtime-test.js"
     printf 'async function send(e,t,n,r,i){return fetch(`vscode://codex/${e}`)}function request(...e){let[t,n]=e,{params:r,select:i,signal:a,source:o}=n??{};return send(t,r,i,a,o)}export{request as l};\n' > "$root/webview/assets/setting-storage-test.js"
-    cat > "$root/webview/assets/app-server-manager-signals-test.js" <<'JS'
+    cat > "$root/webview/assets/app-initial-test.js" <<'JS'
 function j(e){return e}function B(e){if(e==null||typeof e==`string`)return null;let t=Mi(e);return t==null?null:Ni(t)}function Mi(e){return`subAgent`in e?e.subAgent:null}function Ni(e){return typeof e==`string`?Pi():`thread_spawn`in e?{parentThreadId:j(e.thread_spawn.parent_thread_id),depth:e.thread_spawn.depth,agentNickname:e.thread_spawn.agent_nickname,agentRole:e.thread_spawn.agent_role}:Pi()}function Pi(){return{parentThreadId:null,depth:null,agentNickname:null,agentRole:null}}function Xl(e){return e==null?null:Zl(e.agentNickname)??Zl(B(e.source)?.agentNickname)}function Zl(e){if(e==null)return null;let t=e.trim();return t.length===0?null:t}
 JS
     printf 'let marker=`hotkey-window-hotkey-state`;function i(){}export{i};\n' > "$root/webview/assets/general-settings-hotkey-test.js"
@@ -8645,13 +8665,13 @@ test_linux_file_manager_patch_smoke() {
     assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&(D.on(`system-context-menu`,e=>e.preventDefault()),D.removeMenu()),process.platform===`win32`&&D.removeMenu(),'
     assert_not_contains "$extracted/.vite/build/main-test.js" 'D.setMenuBarVisibility(!1)'
     assert_contains "$extracted/.vite/build/main-test.js" '&&D.setIcon('
-    assert_contains "$extracted/webview/assets/app-server-manager-signals-test.js" '`subAgent`in e?e.subAgent:`subagent`in e?e.subagent:null'
-    assert_contains "$extracted/webview/assets/app-server-manager-signals-test.js" 'Zl(e.agentNickname)??Zl(e.agent_nickname)??Zl(B(e.source)?.agentNickname)'
+    assert_contains "$extracted/webview/assets/app-initial-test.js" '`subAgent`in e?e.subAgent:`subagent`in e?e.subagent:null'
+    assert_contains "$extracted/webview/assets/app-initial-test.js" 'Zl(e.agentNickname)??Zl(e.agent_nickname)??Zl(B(e.source)?.agentNickname)'
     assert_not_contains "$output_log" 'Failed to apply Linux File Manager Patch'
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
-    assert_occurrence_count "$extracted/webview/assets/app-server-manager-signals-test.js" '`subagent`in e?e.subagent' '1'
-    assert_occurrence_count "$extracted/webview/assets/app-server-manager-signals-test.js" 'Zl(e.agent_nickname)' '1'
+    assert_occurrence_count "$extracted/webview/assets/app-initial-test.js" '`subagent`in e?e.subagent' '1'
+    assert_occurrence_count "$extracted/webview/assets/app-initial-test.js" 'Zl(e.agent_nickname)' '1'
     assert_not_contains "$output_log" 'Failed to apply Linux File Manager Patch'
 }
 
@@ -8820,7 +8840,7 @@ test_linux_explicit_quit_patch_smoke() {
     mkdir -p "$workspace"
     bundle_body="$(cat <<'JS'
 const x={o:e=>e};let s=require(`node:url`),n=require(`electron`);n=x.o(n);let l=require(`node:os`);l=x.o(l);let i=require(`node:path`);i=x.o(i);let d=require(`node:util`),q=require(`node:crypto`),a=require(`node:fs`);a=x.o(a);
-var pb=class{getNativeTrayMenuItems(){return[{label:rB(this.appName),click:()=>{n.app.quit()}}]}};
+var pb=class{getNativeTrayMenuItems(){return[{label:this.systemQuitMenuItemLabel,click:()=>{n.app.quit()}}]}};
 function qB(r,o){if(o.type===`quit-app`){n.app.quit();return}return o}
 n.app.on(`before-quit`,o=>{let s=BI(),c=t.sr().some(e=>e.status===`ACTIVE`);if(e||i.canQuitWithoutPrompt()||r||!s&&!c){g=!0,a.markAppQuitting();return}let l=n.app.getName();if(n.dialog.showMessageBoxSync({type:`warning`,buttons:[`Quit`,`Cancel`],defaultId:0,cancelId:1,noLink:!0,title:`Quit ${l}?`,message:`Quit ${l}?`,detail:vB({hasInProgressLocalConversation:s,hasEnabledAutomations:c})})!==0){o.preventDefault();return}i.markQuitApproved(),g=!0,a.markAppQuitting()});
 n.app.on(`will-quit`,e=>{if(g=!0,!h){if(i.shouldSkipDrainBeforeQuit()){mB({hotkeyWindowLifecycleManager:c,globalDictationLifecycleManager:l,flushAndDisposeContexts:d,disposables:f});return}e.preventDefault(),h=!0,c.dispose(),l.dispose(),Promise.all([u.flush(),p.flush()]).finally(()=>{d(),f.dispose(),n.app.quit()})}});
@@ -8831,7 +8851,7 @@ JS
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxPrepareForExplicitQuit=()=>{codexLinuxExplicitQuitApproved=!0,codexLinuxMarkQuitInProgress()}'
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxShouldBypassQuitPrompt=()=>codexLinuxExplicitQuitApproved===!0'
-    assert_contains "$extracted/.vite/build/main-test.js" '{label:rB(this.appName),click:()=>{typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),n.app.quit()}}'
+    assert_contains "$extracted/.vite/build/main-test.js" '{label:this.systemQuitMenuItemLabel,click:()=>{typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),n.app.quit()}}'
     assert_contains "$extracted/.vite/build/main-test.js" 'if(o.type===`quit-app`){typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),n.app.quit();return}'
     assert_contains "$extracted/.vite/build/main-test.js" 'if((typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt())||e||i.canQuitWithoutPrompt()||r||!s&&!c){process.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),g=!0,a.markAppQuitting();return}'
     assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),i.markQuitApproved(),g=!0,a.markAppQuitting()'
@@ -8851,7 +8871,7 @@ const source = fs.readFileSync(process.argv[2], "utf8");
 const helperStart = source.indexOf("let codexLinuxTray=null");
 const helperEnd = source.indexOf(";n.app.on(`before-quit`,()=>codexLinuxDestroyTray())", helperStart) + 1;
 const helperSnippet = helperStart === -1 || helperEnd === 0 ? null : source.slice(helperStart, helperEnd);
-const traySnippet = source.match(/\{label:rB\(this\.appName\),click:\(\)=>\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\)\}\}/)?.[0];
+const traySnippet = source.match(/\{label:this\.systemQuitMenuItemLabel,click:\(\)=>\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\)\}\}/)?.[0];
 const quitAppSnippet = source.match(/if\(o\.type===`quit-app`\)\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\);return\}/)?.[0];
 const beforeQuitSnippet = source.match(/if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|i\.canQuitWithoutPrompt\(\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}/)?.[0];
 if (!helperSnippet || !traySnippet || !quitAppSnippet || !beforeQuitSnippet) {
@@ -8865,12 +8885,11 @@ function runTrayQuit({ withHelper = true } = {}) {
   const prepare = withHelper ? () => { state.prepareCalls += 1; mark(); } : undefined;
   const factory = new Function(
     "n",
-    "rB",
     "codexLinuxPrepareForExplicitQuit",
     "codexLinuxMarkQuitInProgress",
     `return (${traySnippet}).click;`,
   );
-  const click = factory({ app }, () => "Quit", prepare, mark);
+  const click = factory({ app }, prepare, mark);
   click();
   return state;
 }
@@ -8963,8 +8982,8 @@ JS
     cat > "$extracted/webview/assets/use-visible-settings-sections-test.js" <<'JS'
 var Xge={"general-settings":xh,"keyboard-shortcuts":ks,appearance:Pf,agent:gU};function n_e(){let e=e=>{switch(e.slug){case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:return!0}}}
 JS
-    cat > "$extracted/webview/assets/index-test.js" <<'JS'
-import{n as routeModule,s as routeToESM}from"./rolldown-runtime-test.js";import{I as routeJsxFactory,R as routeReactFactory}from"./shared-runtime-test.js";function Z(e){let r=(0,RouteReact.lazy)(e);function SettingsRouteWrapper(){let t=(0,RouteReact.useState)(null);return (0,RouteJsx.jsx)(r,{children:t})}return SettingsRouteWrapper}var RouteReact,RouteJsx;routeModule(()=>{RouteReact=routeToESM(routeReactFactory(),1),RouteJsx=routeJsxFactory()})();var H7={},Zge=[`general-settings`,`import`,`profile`,`keyboard-shortcuts`,`appearance`,`agent`,`personalization`,`mcp-settings`,`connections`,`git-settings`,`local-environments`,`worktrees`,`browser-use`,`computer-use`,`data-controls`],Qge=[{key:`app`,heading:H7.appHeading,slugs:[`general-settings`,`import`,`profile`,`keyboard-shortcuts`,`appearance`,`connections`,`git-settings`,`usage`]}];function n_e(){if(O)bb0:switch(D.slug){case`usage`:k=g;break bb0;case`appearance`:case`general-settings`:case`agent`:case`git-settings`:case`account`:case`data-controls`:case`personalization`:k=!1;break bb0;case`keyboard-shortcuts`:k=!1;break bb0;}}function s_e(e){let{slug:n}=e,r=c_e[n];return (0,$.jsx)(r,{})}var c_e={"general-settings":Z(async()=>(await s(async()=>{let{GeneralSettings:e}=await import(`./general-settings-DZbwMmWz.js`);return{GeneralSettings:e}},[],import.meta.url)).GeneralSettings),"keyboard-shortcuts":Z(async()=>(await s(async()=>{let{KeyboardShortcutsSettings:e}=await import(`./keyboard-shortcuts-settings-test.js`);return{KeyboardShortcutsSettings:e}},[],import.meta.url)).KeyboardShortcutsSettings)};export{Z};
+    cat > "$extracted/webview/assets/app-initial-BTphDPeq.js" <<'JS'
+import{n as routeModule,s as routeToESM}from"./rolldown-runtime-test.js";import{I as routeJsxFactory,R as routeReactFactory}from"./shared-runtime-test.js";function Z(e){let r=(0,RouteReact.lazy)(e);function SettingsRouteWrapper(){let t=(0,RouteReact.useState)(null);return (0,RouteJsx.jsx)(r,{children:t})}return SettingsRouteWrapper}var RouteReact,RouteJsx;routeModule(()=>{RouteReact=routeToESM(routeReactFactory(),1),RouteJsx=routeJsxFactory()})();var c_e={"general-settings":Z(async()=>(await s(async()=>{let{GeneralSettings:e}=await import(`./general-settings-DZbwMmWz.js`);return{GeneralSettings:e}},[],import.meta.url)).GeneralSettings),"keyboard-shortcuts":Z(async()=>(await s(async()=>{let{KeyboardShortcutsSettings:e}=await import(`./keyboard-shortcuts-settings-test.js`);return{KeyboardShortcutsSettings:e}},[],import.meta.url)).KeyboardShortcutsSettings)};export{Z};
 JS
     cat > "$extracted/webview/assets/keyboard-shortcuts-settings-test.js" <<'JS'
 import{s as __toESM}from"./chunk-test.js";import{t as __reactFactory}from"./react-test.js";import{t as __jsxFactory}from"./jsx-runtime-test.js";function KeyboardShortcutsSettings(){let t=(0,React.useState)(null);return (0,$.jsx)(`div`,{children:t})}var React,$;initialize(()=>{React=__toESM(__reactFactory(),1),$=__jsxFactory()})();slug:`keyboard-shortcuts`;export{KeyboardShortcutsSettings};
@@ -8983,7 +9002,7 @@ JS
     assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "codex-linux-warm-start-enabled"
     assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "codex-linux-prompt-window-enabled"
     assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" 'import{t as Toggle}from"./linux-settings-toggle-linux.js?v='
-    assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" 'import{codexLinuxReact as React,codexLinuxJsx as $}from"./index-test.js"'
+    assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" 'import{codexLinuxReact as React,codexLinuxJsx as $}from"./app-initial-BTphDPeq.js"'
     assert_not_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "__reactFactory"
     assert_not_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "__jsxFactory"
     assert_not_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "function LinuxSwitch"
@@ -8994,14 +9013,12 @@ JS
     assert_contains "$extracted/webview/assets/settings-shared-test.js" "settings.section.linux-desktop"
     assert_contains "$extracted/webview/assets/use-visible-settings-sections-test.js" '"linux-desktop":xh,"general-settings":xh'
     assert_contains "$extracted/webview/assets/use-visible-settings-sections-test.js" 'case`linux-desktop`:return!0;case`general-settings`'
-    assert_contains "$extracted/webview/assets/index-test.js" "linux-desktop-settings-linux.js?v="
-    assert_contains "$extracted/webview/assets/index-test.js" 'export{Z,'
-    assert_contains "$extracted/webview/assets/index-test.js" 'RouteReact as codexLinuxReact,RouteJsx as codexLinuxJsx'
-    assert_contains "$extracted/webview/assets/index-test.js" '"linux-desktop":'
-    assert_contains "$extracted/webview/assets/index-test.js" 'Zge=\[`general-settings`,`linux-desktop`'
-    assert_contains "$extracted/webview/assets/index-test.js" 'slugs:\[`general-settings`,`linux-desktop`'
-    assert_not_contains "$extracted/webview/assets/index-test.js" "keybinds-settings-linux.js"
-    assert_not_contains "$extracted/webview/assets/index-test.js" "codexLinuxKeybindOverridesRuntime"
+    assert_contains "$extracted/webview/assets/app-initial-BTphDPeq.js" "linux-desktop-settings-linux.js?v="
+    assert_contains "$extracted/webview/assets/app-initial-BTphDPeq.js" 'export{Z,'
+    assert_contains "$extracted/webview/assets/app-initial-BTphDPeq.js" 'RouteReact as codexLinuxReact,RouteJsx as codexLinuxJsx'
+    assert_contains "$extracted/webview/assets/app-initial-BTphDPeq.js" '"linux-desktop":'
+    assert_not_contains "$extracted/webview/assets/app-initial-BTphDPeq.js" "keybinds-settings-linux.js"
+    assert_not_contains "$extracted/webview/assets/app-initial-BTphDPeq.js" "codexLinuxKeybindOverridesRuntime"
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_occurrence_count "$extracted/webview/assets/settings-sections-test.js" 'slug:`linux-desktop`' '1'
@@ -9009,7 +9026,7 @@ JS
     assert_occurrence_count "$extracted/webview/assets/settings-shared-test.js" "settings.section.linux-desktop" '1'
     assert_occurrence_count "$extracted/webview/assets/use-visible-settings-sections-test.js" '"linux-desktop"' '1'
     assert_occurrence_count "$extracted/webview/assets/use-visible-settings-sections-test.js" 'case`linux-desktop`' '1'
-    assert_occurrence_count "$extracted/webview/assets/index-test.js" "linux-desktop-settings-linux.js" '1'
+    assert_occurrence_count "$extracted/webview/assets/app-initial-BTphDPeq.js" "linux-desktop-settings-linux.js" '1'
 }
 
 test_keybinds_settings_patch_warns_on_bundle_shape_miss() {
@@ -9033,7 +9050,7 @@ JS
     cat > "$extracted/webview/assets/use-visible-settings-sections-test.js" <<'JS'
 var Xge={"general-settings":xh,appearance:Pf};
 JS
-    cat > "$extracted/webview/assets/index-test.js" <<'JS'
+    cat > "$extracted/webview/assets/app-initial-drift-test.js" <<'JS'
 var H7={},Zge=[`general-settings`,`appearance`],Qge=[{key:`app`,heading:H7.appHeading,slugs:[`general-settings`,`appearance`,`connections`,`git-settings`,`usage`]}];
 JS
 
@@ -9044,7 +9061,7 @@ JS
     [ ! -f "$extracted/webview/assets/linux-settings-section-linux.js" ] || fail "Fallback section asset should not be written when route bundle is missing"
     [ ! -f "$extracted/webview/assets/linux-settings-group-linux.js" ] || fail "Fallback group asset should not be written when route bundle is missing"
     assert_not_contains "$extracted/webview/assets/settings-sections-test.js" 'slug:`linux-desktop`'
-    assert_not_contains "$extracted/webview/assets/index-test.js" "linux-desktop-settings-linux.js"
+    assert_not_contains "$extracted/webview/assets/app-initial-drift-test.js" "linux-desktop-settings-linux.js"
 }
 
 test_browser_annotation_screenshot_patch_smoke() {
@@ -9056,18 +9073,19 @@ test_browser_annotation_screenshot_patch_smoke() {
     mkdir -p "$workspace"
     make_fake_extracted_asar "$extracted" 'let D={removeMenu(){},setMenuBarVisibility(){},setIcon(){},once(){}};let n=require(`electron`),t=require(`node:path`),a=require(`node:fs`);...process.platform===`win32`?{autoHideMenuBar:!0}:{},process.platform===`win32`&&D.removeMenu(),foo)}),D.once(`ready-to-show`,()=>{})'
     cat > "$extracted/.vite/build/comment-preload.js" <<'JS'
-if(ve&&M?.anchor.kind===`element`){let e=hl(M,y.current)??null,t=e==null?null:El(e);ke=t?.rect??Rl(M.anchor),je=t?.borderRadius,Ae=Xl(M.anchor,ke,_.width,_.height)}
-Se=(!ve&&xe!=null?k.filter(e=>e.id!==xe.id):k).flatMap
+let mt=Te;M?.kind===`comment`?mt=pt?[M.annotation]:Te:pt||P?mt=[]:ft!=null&&(mt=Te.filter(e=>e.id!==ft.id));
+let ht=mt.flatMap(e=>[e]),kt=null,At=`hover-box`,jt,Mt=0,I=[];
+if(P&&M?.annotation.anchor.kind===`element`){Mt=xt[0]??0;let e=bt==null?null:hs(bt),t=e?.rect??Ss(M.annotation.anchor);jt=e?.borderRadius,At=Vs(M.annotation.anchor,t,C.width,C.height),kt=Is(M.annotation.anchor,t,bt),I=bc(F,C,{clipToVisibleArea:!0})}
 JS
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
-    assert_contains "$extracted/.vite/build/comment-preload.js" 'if(ve&&M?.anchor.kind===`element`){ke=Rl(M.anchor),je=void 0,Ae=Xl(M.anchor,ke,_.width,_.height)}'
-    assert_contains "$extracted/.vite/build/comment-preload.js" 'Se=(ve?_e:!ve&&xe!=null?k.filter(e=>e.id!==xe.id):k).flatMap'
-    assert_not_contains "$extracted/.vite/build/comment-preload.js" 'hl(M,y.current)'
+    assert_contains "$extracted/.vite/build/comment-preload.js" 'let t=Ss(M.annotation.anchor);jt=void 0,At=Vs'
+    assert_contains "$extracted/.vite/build/comment-preload.js" 'M?\.kind===`comment`?mt=pt?\[M\.annotation\]:Te'
+    assert_not_contains "$extracted/.vite/build/comment-preload.js" 'e?.rect??Ss'
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
-    assert_occurrence_count "$extracted/.vite/build/comment-preload.js" 'ke=Rl(M.anchor)' '1'
-    assert_occurrence_count "$extracted/.vite/build/comment-preload.js" 'Se=(ve?_e' '1'
+    assert_occurrence_count "$extracted/.vite/build/comment-preload.js" 'let t=Ss(M.annotation.anchor)' '1'
+    assert_occurrence_count "$extracted/.vite/build/comment-preload.js" 'M?\.kind===`comment`?mt=pt?\[M\.annotation\]:Te' '1'
 }
 
 test_linux_single_instance_patch_smoke() {
