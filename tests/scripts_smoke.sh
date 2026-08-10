@@ -3980,7 +3980,7 @@ make_update_nix_hash_fixture() {
   };
 }
 EOF
-    printf '%s\n' '{"dependencies":{"electron":"42.1.0","better-sqlite3":"12.9.0","node-pty":"1.1.0"}}' \
+    printf '%s\n' '{"dependencies":{"@parcel/watcher":"2.5.6","electron":"42.1.0","better-sqlite3":"12.9.0","node-pty":"1.1.0"}}' \
         > "$fixture/nix/native-modules/package.json"
     printf '%s\n' '{"name":"native-modules","lockfileVersion":3,"packages":{}}' \
         > "$fixture/nix/native-modules/package-lock.json"
@@ -3990,7 +3990,8 @@ EOF
 set -euo pipefail
 echo "validate stub invoked"
 if [ "${VALIDATE_PIN_CHANGE:-0}" = "1" ]; then
-    python3 - "$REPO_DIR/flake.nix" <<'PY'
+    python3 - "$REPO_DIR/flake.nix" "$REPO_DIR/nix/native-modules/package.json" <<'PY'
+import json
 from pathlib import Path
 import re
 import sys
@@ -3999,6 +4000,11 @@ path = Path(sys.argv[1])
 text = path.read_text()
 text = re.sub(r'(codexVersion\s*=\s*")[^"]+(";)', r'\g<1>99.0.0\2', text, count=1)
 path.write_text(text)
+
+package_path = Path(sys.argv[2])
+package = json.loads(package_path.read_text())
+package["dependencies"]["@parcel/watcher"] = "2.5.7"
+package_path.write_text(json.dumps(package, indent=2) + "\n")
 PY
 fi
 EOF
@@ -4114,6 +4120,9 @@ test_update_nix_hashes_verifies_changed_pins() {
     assert_contains "$fixture/output.log" "Nix builds succeeded after refreshing the upstream pins and Codex.dmg hash."
     assert_contains "$fixture/calls.log" "nix-store --add-fixed"
     assert_contains "$fixture/calls.log" "nix build"
+    assert_contains "$fixture/calls.log" "npm install --package-lock-only --ignore-scripts"
+    [ "$(node -p "require('$fixture/nix/native-modules/package.json').dependencies['@parcel/watcher']")" = "2.5.7" ] || \
+        fail "Expected @parcel/watcher pin refresh to update package.json"
 }
 
 test_update_nix_hashes_verifies_changed_dmg_hash() {
@@ -4614,6 +4623,7 @@ test_native_module_rebuild_uses_local_electron_rebuild_toolchain() {
     mkdir -p "$app_dir/node_modules/better-sqlite3" "$app_dir/node_modules/node-pty" "$fake_bin"
     printf '%s\n' '{"version":"12.9.0"}' > "$app_dir/node_modules/better-sqlite3/package.json"
     printf '%s\n' '{"version":"1.1.0"}' > "$app_dir/node_modules/node-pty/package.json"
+    printf '%s\n' '{"dependencies":{"@parcel/watcher":"2.5.6"}}' > "$app_dir/package.json"
 
     cat > "$fake_bin/npm" <<'SCRIPT'
 #!/usr/bin/env bash
@@ -4672,6 +4682,14 @@ case "$args" in
         printf '%s\n' '{"version":"1.1.0"}' > node_modules/node-pty/package.json
         ;;
 esac
+case "$args" in
+    *" @parcel/watcher@2.5.6 "*)
+        prefix="${args#* --prefix }"
+        prefix="${prefix%% *}"
+        mkdir -p "$prefix/node_modules/@parcel/watcher" "$prefix/node_modules/@parcel/watcher-linux-x64-glibc"
+        printf '%s\n' '{"version":"2.5.6"}' > "$prefix/node_modules/@parcel/watcher/package.json"
+        ;;
+esac
 SCRIPT
     chmod +x "$fake_bin/npm"
 
@@ -4728,14 +4746,43 @@ test_native_module_rebuild_accepts_prebuilt_source() {
     mkdir -p \
         "$app_dir/node_modules/better-sqlite3" \
         "$app_dir/node_modules/node-pty" \
+        "$source_dir/@parcel/watcher" \
+        "$source_dir/@parcel/watcher-linux-x64-glibc" \
+        "$source_dir/detect-libc" \
+        "$source_dir/is-extglob" \
+        "$source_dir/is-glob" \
+        "$source_dir/node-addon-api" \
+        "$source_dir/picomatch" \
         "$source_dir/better-sqlite3/build/Release" \
         "$source_dir/node-pty/build/Release"
     printf '%s\n' '{"version":"12.9.0"}' > "$app_dir/node_modules/better-sqlite3/package.json"
     printf '%s\n' '{"version":"1.1.0"}' > "$app_dir/node_modules/node-pty/package.json"
+    printf '%s\n' '{"dependencies":{"@parcel/watcher":"2.5.6"}}' > "$app_dir/package.json"
     printf '%s\n' stale > "$app_dir/node_modules/better-sqlite3/old.txt"
 
     printf '%s\n' '{"version":"12.9.0"}' > "$source_dir/better-sqlite3/package.json"
     printf '%s\n' '{"version":"1.1.0"}' > "$source_dir/node-pty/package.json"
+    printf '%s\n' '{"version":"2.5.6","main":"index.js","dependencies":{"detect-libc":"2.0.4","is-glob":"4.0.3","node-addon-api":"7.1.1","picomatch":"4.0.3"},"optionalDependencies":{"@parcel/watcher-linux-x64-glibc":"2.5.6"}}' \
+        > "$source_dir/@parcel/watcher/package.json"
+    cat > "$source_dir/@parcel/watcher/index.js" <<'JS'
+require("detect-libc");
+require("is-glob");
+require("node-addon-api");
+require("picomatch");
+require("@parcel/watcher-linux-x64-glibc");
+module.exports = { subscribe() {} };
+JS
+    printf '%s\n' '{"version":"2.5.6","main":"index.js"}' \
+        > "$source_dir/@parcel/watcher-linux-x64-glibc/package.json"
+    printf '%s\n' 'module.exports = {};' > "$source_dir/@parcel/watcher-linux-x64-glibc/index.js"
+    for dependency in detect-libc is-extglob node-addon-api picomatch; do
+        printf '%s\n' "{\"name\":\"$dependency\",\"version\":\"1.0.0\",\"main\":\"index.js\"}" \
+            > "$source_dir/$dependency/package.json"
+        printf '%s\n' 'module.exports = {};' > "$source_dir/$dependency/index.js"
+    done
+    printf '%s\n' '{"name":"is-glob","version":"4.0.3","main":"index.js","dependencies":{"is-extglob":"2.1.1"}}' \
+        > "$source_dir/is-glob/package.json"
+    printf '%s\n' 'require("is-extglob"); module.exports = () => false;' > "$source_dir/is-glob/index.js"
     : > "$source_dir/better-sqlite3/build/Release/better_sqlite3.node"
     : > "$source_dir/better-sqlite3/build/Release/junk.o"
     : > "$source_dir/node-pty/build/Release/pty.node"
@@ -4757,6 +4804,13 @@ test_native_module_rebuild_accepts_prebuilt_source() {
     assert_contains "$output_log" "Using prebuilt native modules from $source_dir"
     assert_file_exists "$app_dir/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
     assert_file_exists "$app_dir/node_modules/node-pty/build/Release/pty.node"
+    assert_file_exists "$app_dir/node_modules/@parcel/watcher/package.json"
+    assert_file_exists "$app_dir/node_modules/@parcel/watcher-linux-x64-glibc/package.json"
+    assert_file_exists "$app_dir/node_modules/is-extglob/package.json"
+    NODE_PATH="$app_dir/node_modules" node -e '
+const watcher = require("@parcel/watcher");
+if (typeof watcher.subscribe !== "function") process.exit(1);
+' || fail "Expected @parcel/watcher to load from the staged app tree"
     [ ! -f "$app_dir/node_modules/better-sqlite3/old.txt" ] || fail "Expected stale better-sqlite3 module to be replaced"
     [ ! -f "$app_dir/node_modules/better-sqlite3/build/Release/junk.o" ] || fail "Expected better-sqlite3 build junk to be pruned"
     [ ! -f "$app_dir/node_modules/node-pty/build/Release/junk.o" ] || fail "Expected node-pty build junk to be pruned"
@@ -6997,7 +7051,7 @@ functions = [source[
     source.index("codex_restore_original_ld_library_path() {"):
     source.index("# Capture before package-specific launcher patches")
 ]]
-for name in ("cached_codex_cli_path", "find_fnm_codex_cli", "find_codex_cli", "verify_cli_launch_path", "pid_parent_matches", "codex_cli_version_probe", "codex_cli_version", "codex_cli_missing_optional_dependency", "log_codex_cli_path"):
+for name in ("cached_codex_cli_path", "find_fnm_codex_cli", "find_mise_codex_cli", "is_codex_cli_path", "find_codex_cli", "verify_cli_launch_path", "pid_parent_matches", "codex_cli_version_probe", "codex_cli_version", "codex_cli_missing_optional_dependency", "log_codex_cli_path"):
     match = re.search(r"^" + re.escape(name) + r"\(\) \{[\s\S]*?^\}\n", source, re.M)
     if match is None:
         raise SystemExit(f"missing {name}")
@@ -7011,7 +7065,9 @@ pathlib.Path(sys.argv[2]).write_text(
     + r'''
 case "${1:?}" in
     find)
-        find_codex_cli
+        # 容忍查找失败：CLI 可能不存在（如仅 mise shim 无真实安装），
+        # 此时应输出空并返回 0，供上层断言"未选中 mise shim"。
+        find_codex_cli || true
         ;;
     version)
         codex_cli_version "$2"
@@ -7115,6 +7171,28 @@ PY
     selected_cli="$(env -i PATH="$path_cli_bin:$clean_tool_path" HOME="$fake_home" "$launcher_probe" find)"
     [ "$selected_cli" = "$path_cli_bin/codex" ] || fail "CLI lookup must keep the first PATH hit, got $selected_cli"
 
+    local mise_shim_dir="$workspace/mise-shims"
+    local mise_bin_dir="$workspace/mise-bin"
+    local mise_data_dir="$workspace/mise-data"
+    local mise_installed="$mise_data_dir/mise/installs/npm-openai-codex/9.99.0/bin/codex"
+    mkdir -p "$mise_shim_dir" "$mise_bin_dir" "$(dirname "$mise_installed")"
+    printf '#!/usr/bin/env bash\nprintf "codex-cli 9.99.0\\n"\n' > "$mise_installed"
+    chmod +x "$mise_installed"
+    # mise shim: symlink named codex pointing at the mise binary
+    printf '#!/usr/bin/env bash\nprintf "mise 2026.8.3\\n"\n' > "$mise_bin_dir/mise"
+    chmod +x "$mise_bin_dir/mise"
+    ln -s "$mise_bin_dir/mise" "$mise_shim_dir/codex"
+    selected_cli="$(env -i PATH="$mise_shim_dir:$clean_tool_path" HOME="$fake_home" XDG_DATA_HOME="$mise_data_dir" "$launcher_probe" find)"
+    [ "$selected_cli" = "$mise_installed" ] || \
+        fail "CLI lookup must resolve mise-installed codex through the mise shim, got $selected_cli"
+
+    # no mise install dir present: fall back to nothing rather than the mise binary
+    local empty_home="$workspace/empty-mise-home"
+    mkdir -p "$empty_home"
+    chmod 0755 "$empty_home"
+    selected_cli="$(env -i PATH="$mise_shim_dir:$clean_tool_path" HOME="$empty_home" "$launcher_probe" find)"
+    [ -z "$selected_cli" ] || fail "CLI lookup must never select the mise shim binary, got $selected_cli"
+
     local brew_home="$workspace/brew-home"
     mkdir -p "$brew_home/.linuxbrew/bin"
     printf '#!/usr/bin/env bash\nprintf "codex-cli 0.160.0\\n"\n' > "$brew_home/.linuxbrew/bin/codex"
@@ -7145,6 +7223,16 @@ PY
     ln -s "$external_cli" "$visible_cli"
     resolved_cli="$(env -i PATH="$HOST_TOOL_PATH" HOME="$fake_home" "$launcher_probe" resolve "$visible_cli")"
     [ "$resolved_cli" = "$(realpath "$external_cli")" ] || fail "CLI resolver must canonicalize visible symlinks, got $resolved_cli"
+
+    local alt_name_bin="$workspace/alt-name-bin"
+    local alt_name_target="$workspace/alt-name-target/openai-codex-bin"
+    mkdir -p "$alt_name_bin" "$(dirname "$alt_name_target")"
+    printf '#!/usr/bin/env bash\nprintf "codex-cli 0.173.0\\n"\n' > "$alt_name_target"
+    chmod 0755 "$alt_name_target" "$(dirname "$alt_name_target")"
+    ln -s "$alt_name_target" "$alt_name_bin/codex"
+    selected_cli="$(env -i PATH="$alt_name_bin:$clean_tool_path" HOME="$fake_home" "$launcher_probe" find)"
+    [ "$selected_cli" = "$alt_name_bin/codex" ] || \
+        fail "CLI lookup must accept a codex symlink to an executable with another basename, got $selected_cli"
 
     local custom_brew_prefix="$workspace/custom-homebrew"
     local custom_brew_target_dir="$workspace/custom-homebrew-cellar/openai-codex/0.42.0/bin"

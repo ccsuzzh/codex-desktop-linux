@@ -192,12 +192,16 @@ const {
   applyLinuxI18nGatePatch,
   applyLinuxOpaqueWindowsDefaultPatch,
   applyLinuxSettingsSearchVisibilityPatch,
+  applyLinuxAppShellTabLayoutPerformancePatch,
+  applyLinuxSidebarScrollPerformancePatch,
   applyLinuxSkillsListDedupePatch,
   applyLinuxThreadSidePanelNativeTooltipPatch,
   applyLinuxTooltipWindowControlsCollisionPatch,
   applyLinuxWindowControlsSafeAreaPatch,
   applySubagentNicknameMetadataPatch,
   codexLinuxWatchBrowserWebviewAttachment,
+  matchesLinuxAppShellTabLayoutPerformanceContract,
+  matchesLinuxSidebarScrollPerformanceContract,
 } = require("./patches/impl/webview/index.js");
 const {
   findCodexRequestWebviewAsset,
@@ -1034,6 +1038,8 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-projectless-xdg-documents-dir",
     "linux-workspace-root-open-targets",
     "linux-settings-search-visibility",
+    "linux-sidebar-scroll-performance",
+    "linux-app-shell-tab-layout-performance",
     "linux-i18n-gate",
     "automation-schedule-multi-time-rrule",
     "automation-update-eager-tool",
@@ -1141,6 +1147,14 @@ test("default core patch descriptors are grouped and unique", () => {
     descriptors.find((descriptor) => descriptor.id === "linux-terminal-user-path")?.ciPolicy,
     "optional",
   );
+  const sidebarScrollPerformance = descriptors.find(
+    (descriptor) => descriptor.id === "linux-sidebar-scroll-performance",
+  );
+  assert.equal(sidebarScrollPerformance?.ciPolicy, "optional");
+  assert.equal(sidebarScrollPerformance?.pattern.test("app-initial-Biw83Aiz.js"), true);
+  assert.equal(sidebarScrollPerformance?.pattern.test("app-DuLjgNkx.css"), false);
+  assert.equal(sidebarScrollPerformance?.assetMatch(sidebarScrollFixture()), true);
+  assert.equal(sidebarScrollPerformance?.assetMatch("function unrelated(){}"), false);
   assert.equal(
     descriptors.find((descriptor) => descriptor.id === "linux-computer-use-avatar-cursor")?.ciPolicy,
     "optional",
@@ -3515,6 +3529,217 @@ test("keeps tooltip collision padding after middleware alias drift", () => {
 
   assert.match(patched, /o\(\{mainAxis:ne,crossAxis:t\}\),l\(\{padding:\{top:44,right:8,bottom:8,left:8\}\}\),u\(\{padding:\{top:44,right:8,bottom:8,left:8\}\}\),d\(\{padding:\{top:44,right:8,bottom:8,left:8\},apply/);
   assert.doesNotMatch(patched, /[,(]\{padding:8\}/);
+});
+
+function sidebarScrollFixture({ handler = null, duplicate = false } = {}) {
+  const scrollHandler = handler ??
+    "e=>{let t=D.current;(t==null||e.timeStamp-t>=CKc)&&(Fh(),D.current=e.timeStamp);let{scrollTop:n}=e.currentTarget;C||(u?.(n>0),r(n))}";
+  const container =
+    "(0,SKc.jsxs)(`div`,{...cm.sidebarScroll,className:$(`vertical-scroll-fade-mask relative isolate flex min-h-0 flex-1 flex-col overflow-y-auto [contain:layout_paint]`,_Kc.headerFadeMask),ref:p,onScroll:" +
+    scrollHandler +
+    ",children:[h,m]})";
+  const source = `function yKc(e){return ${container}}`;
+  return duplicate ? `${source}${source}` : source;
+}
+
+test("disables only the main sidebar scroll-driven fade timeline", () => {
+  const source = `${sidebarScrollFixture()}function unrelated(){return\`vertical-scroll-fade-mask\`}`;
+
+  const patched = applyPatchTwice(applyLinuxSidebarScrollPerformancePatch, source);
+
+  assert.equal(
+    (patched.match(/animationName:`none`,animationTimeline:`auto`/g) ?? []).length,
+    1,
+  );
+  assert.match(
+    patched,
+    /"--bottom-fade":`calc\(var\(--spacing\) \* 10\)`/,
+  );
+  assert.match(
+    patched,
+    /onScroll:e=>\{let t=D\.current;.*let\{scrollTop:n\}=e\.currentTarget;C\|\|\(u\?\.\(n>0\),r\(n\)\)\}/,
+  );
+  assert.match(patched, /function unrelated\(\)\{return`vertical-scroll-fade-mask`\}/);
+  assert.equal(matchesLinuxSidebarScrollPerformanceContract(patched), true);
+});
+
+test("matches the semantic main-sidebar contract rather than generic fade masks", () => {
+  assert.equal(matchesLinuxSidebarScrollPerformanceContract(sidebarScrollFixture()), true);
+  assert.equal(
+    matchesLinuxSidebarScrollPerformanceContract(
+      "function generic(){return jsx(`div`,{className:`vertical-scroll-fade-mask [contain:layout_paint]`,onScroll:e=>e.currentTarget.scrollTop})}",
+    ),
+    false,
+  );
+  assert.equal(
+    matchesLinuxSidebarScrollPerformanceContract(sidebarScrollFixture({ duplicate: true })),
+    false,
+  );
+});
+
+test("leaves the sidebar asset byte-identical when its scroll handler drifts", () => {
+  const source = sidebarScrollFixture({
+    handler: "e=>{r(e.currentTarget.dataset.scrollPosition)}",
+  });
+
+  const { value, warnings } = captureWarns(() =>
+    applyLinuxSidebarScrollPerformancePatch(source),
+  );
+
+  assert.equal(value, source);
+  assert.deepEqual(warnings, [
+    "WARN: Could not uniquely identify the main sidebar scroll container — skipping Linux sidebar scroll performance patch",
+  ]);
+});
+
+test("leaves ambiguous sidebar assets byte-identical", () => {
+  const source = sidebarScrollFixture({ duplicate: true });
+
+  const { value, warnings } = captureWarns(() =>
+    applyLinuxSidebarScrollPerformancePatch(source),
+  );
+
+  assert.equal(value, source);
+  assert.deepEqual(warnings, [
+    "WARN: Could not uniquely identify the main sidebar scroll container — skipping Linux sidebar scroll performance patch",
+  ]);
+});
+
+test("rejects an incomplete sidebar performance patch marker", () => {
+  const source = sidebarScrollFixture().replace(
+    "),ref:p,onScroll:",
+    "),style:{animationName:`none`},ref:p,onScroll:",
+  );
+
+  const { value, warnings } = captureWarns(() =>
+    applyLinuxSidebarScrollPerformancePatch(source),
+  );
+
+  assert.equal(value, source);
+  assert.deepEqual(warnings, [
+    "WARN: Found incomplete Linux sidebar scroll performance patch — skipping",
+  ]);
+});
+
+function appShellTabMountAnimationFixture({
+  duplicate = false,
+  initialExpression = "p?PCr:!1",
+} = {}) {
+  const tab =
+    "function ECr(e){let [N,P]=useState(!1),z=(e,t)=>{P(t.scrollWidth>t.clientWidth)};return jsx(`span`,{\"data-app-shell-tab-close-button\":!0,className:`@max-[4rem]/app-shell-tab:invisible`})}function kCr(e){let p=!Zm()&&u?.dragState==null;let R=" +
+    initialExpression +
+    ",z=p?PCr:void 0,B;return (0,eM.jsxs)(rp.div,{inert:F,\"data-app-shell-tab-controller\":I,\"data-tab-id\":m,ref:L,initial:R,animate:FCr,exit:z,transition:wCr,onAnimationComplete:B,className:`@container/app-shell-tab contain-content`,style:ee,children:[se,ue]})}";
+  const presets =
+    "var PCr={maxWidth:`0px`,minWidth:`0px`},FCr={maxWidth:`160px`,minWidth:`90px`};";
+  const source = `${tab}${presets}`;
+  return duplicate ? `${source}${source.replaceAll("kCr", "kDr")}` : source;
+}
+
+test("skips app-shell tab enter animation while preserving exit animation", () => {
+  const source = appShellTabMountAnimationFixture();
+
+  const patched = applyPatchTwice(
+    applyLinuxAppShellTabLayoutPerformancePatch,
+    source,
+  );
+
+  assert.match(patched, /let p=!Zm\(\)&&u\?\.dragState==null;let R=!1,z=p\?PCr:void 0,B/);
+  assert.match(
+    patched,
+    /initial:R,animate:FCr,exit:z,transition:wCr,onAnimationComplete:B/,
+  );
+  assert.match(
+    patched,
+    /z=\(e,t\)=>\{codexLinuxScheduleAppShellTabOverflow\(t,P\)\}/,
+  );
+  assert.match(
+    patched,
+    /function codexLinuxScheduleAppShellTabOverflow\(e,t\)/,
+  );
+  assert.match(patched, /PCr=\{maxWidth:`0px`,minWidth:`0px`\}/);
+  assert.equal(matchesLinuxAppShellTabLayoutPerformanceContract(patched), true);
+});
+
+test("coalesces app-shell tab overflow reads and ignores disconnected labels", () => {
+  const patched = applyLinuxAppShellTabLayoutPerformancePatch(
+    appShellTabMountAnimationFixture(),
+  );
+  const helper = patched.slice(
+    patched.indexOf("const codexLinuxAppShellTabOverflowFrames="),
+    patched.indexOf("function ECr("),
+  );
+  const frames = [];
+  const schedule = new Function(
+    "requestAnimationFrame",
+    `${helper};return codexLinuxScheduleAppShellTabOverflow`,
+  )((callback) => {
+    frames.push(callback);
+    return frames.length;
+  });
+  const label = { clientWidth: 80, isConnected: true, scrollWidth: 120 };
+  const states = [];
+
+  schedule(label, (overflow) => states.push(overflow));
+  schedule(label, (overflow) => states.push(overflow));
+  assert.equal(frames.length, 1);
+  assert.deepEqual(states, []);
+
+  frames.shift()();
+  assert.deepEqual(states, [true]);
+
+  schedule(label, (overflow) => states.push(overflow));
+  label.isConnected = false;
+  frames.shift()();
+  assert.deepEqual(states, [true]);
+});
+
+test("matches only the app-shell width-animation contract", () => {
+  assert.equal(
+    matchesLinuxAppShellTabLayoutPerformanceContract(
+      appShellTabMountAnimationFixture(),
+    ),
+    true,
+  );
+  assert.equal(
+    matchesLinuxAppShellTabLayoutPerformanceContract(
+      "function generic(){let R=p?PCr:!1,z=p?PCr:void 0;return jsx(motion.div,{initial:R,animate:FCr,exit:z})}",
+    ),
+    false,
+  );
+  assert.equal(
+    matchesLinuxAppShellTabLayoutPerformanceContract(
+      appShellTabMountAnimationFixture({ duplicate: true }),
+    ),
+    false,
+  );
+});
+
+test("leaves drifted app-shell tab animation byte-identical", () => {
+  const source = appShellTabMountAnimationFixture({
+    initialExpression: "getInitialTabWidth(p)",
+  });
+
+  const { value, warnings } = captureWarns(() =>
+    applyLinuxAppShellTabLayoutPerformancePatch(source),
+  );
+
+  assert.equal(value, source);
+  assert.deepEqual(warnings, [
+    "WARN: Could not uniquely identify the app-shell tab layout contract — skipping Linux tab layout performance patch",
+  ]);
+});
+
+test("leaves ambiguous app-shell tab animation assets byte-identical", () => {
+  const source = appShellTabMountAnimationFixture({ duplicate: true });
+
+  const { value, warnings } = captureWarns(() =>
+    applyLinuxAppShellTabLayoutPerformancePatch(source),
+  );
+
+  assert.equal(value, source);
+  assert.deepEqual(warnings, [
+    "WARN: Could not uniquely identify the app-shell tab layout contract — skipping Linux tab layout performance patch",
+  ]);
 });
 
 test("removes native title tooltip from the thread side panel toolbar action", () => {
