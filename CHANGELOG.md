@@ -11,10 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   updates automatically** setting. Turning it off keeps notification and DMG
   verification active while deferring local package builds until an explicit
   **Check for updates**.
-- The embedded Computer Use backend is synchronized to standalone v0.4.7 as
-  `0.4.7-linux-alpha1`, including generic X11/EWMH window control, X11
-  `xdotool` keyboard, text, and coordinate-click input, KDE portal scroll
-  polarity, and portal key chords, with generic X11 registered last.
+- The embedded Computer Use backend is synchronized to standalone v0.4.9 as
+  `0.4.9-linux-alpha1`, including generic X11/EWMH window control, deep GTK4
+  accessibility traversal, bounded queue and child-read work, X11 `xdotool`
+  keyboard, text, and coordinate-click input, KDE portal scroll polarity, and
+  portal key chords, with generic X11 registered last.
 - A shared upstream DMG acceptance profile now produces the same structured
   decision for local installs, updater rebuilds, and scheduled CI. Scheduled
   rejections create one fingerprinted drift issue and supersede issues for
@@ -43,6 +44,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Native remote-mobile builds now route side-by-side `--new-instance` launches
+  through the normal single-instance handoff, preventing competing Desktop
+  Remote Control owners. Nix module sessions instead proxy every Desktop
+  app-server RPC to the single declarative systemd owner, so enablement,
+  pairing, and status calls reach the process listening on the Unix control
+  socket without restricting non-owner Desktop instances.
 - Deferred upstream DMGs are revalidated before a build. A newer candidate
   supersedes the pending download, and a deleted cached DMG is redownloaded in
   the same explicit check. Fresh app-launch checks preserve the stable deferred
