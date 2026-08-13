@@ -44,6 +44,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- The opt-in Dock icon tweak is restored for the signed official Linux package,
+  using its ChatGPT icon and desktop metadata while preserving ChatGPT
+  Community window, tray, and managed launcher synchronization.
 - Native remote-mobile builds now route side-by-side `--new-instance` launches
   through the normal single-instance handoff, preventing competing Desktop
   Remote Control owners. Nix module sessions instead proxy every Desktop

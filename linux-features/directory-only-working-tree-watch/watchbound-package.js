@@ -29,14 +29,6 @@ const WATCHBOUND_TARGET_CONTRACTS = Object.freeze({
     elfClass: 64,
     elfMachine: 183,
   }),
-  arm: Object.freeze({
-    packageName: "@gadicc/watchbound-node-linux-arm-gnueabihf",
-    path: "watchbound.linux-arm-gnueabihf.node",
-    target: "linux-arm-gnueabihf",
-    targetTriple: "armv7-unknown-linux-gnueabihf",
-    elfClass: 32,
-    elfMachine: 40,
-  }),
 });
 const REQUIRED_WATCHBOUND_TARGET_ARCHITECTURES = Object.freeze(
   Object.keys(WATCHBOUND_TARGET_CONTRACTS),
@@ -198,7 +190,7 @@ function validateArtifactManifest(manifest) {
     )
   ) {
     throw new Error(
-      "Watchbound artifact manifest must contain exactly the x64, arm64, and arm targets",
+      "Watchbound artifact manifest must contain exactly the x64 and arm64 targets",
     );
   }
   for (const [architecture] of targetArtifacts) {

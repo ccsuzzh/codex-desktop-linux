@@ -1189,7 +1189,6 @@ function packageFixtureManifest(t) {
   const version = WATCHBOUND_VERSION;
   const x64Binding = makeElf(62);
   const arm64Binding = makeElf(183);
-  const armBinding = makeElf(40, 32);
   const wrapper = createPackageFixture(t, "watchbound", version, {
     "index.js": "export const fixture = true;\n",
   });
@@ -1197,14 +1196,10 @@ function packageFixtureManifest(t) {
     "index.js": "module.exports = {};\n",
   });
   const targetFixture = (architecture, binding) => {
-    const target = architecture === "arm"
-      ? "linux-arm-gnueabihf"
-      : `linux-${architecture}-gnu`;
+    const target = `linux-${architecture}-gnu`;
     const targetTriple = architecture === "x64"
       ? "x86_64-unknown-linux-gnu"
-      : architecture === "arm64"
-        ? "aarch64-unknown-linux-gnu"
-        : "armv7-unknown-linux-gnueabihf";
+      : "aarch64-unknown-linux-gnu";
     const bindingPath = `watchbound.${target}.node`;
     const nativeSha256 = sha256(binding);
     return createPackageFixture(
@@ -1229,7 +1224,6 @@ function packageFixtureManifest(t) {
   };
   const x64 = targetFixture("x64", x64Binding);
   const arm64 = targetFixture("arm64", arm64Binding);
-  const arm = targetFixture("arm", armBinding);
   const artifact = (key, name, fixture, extra = {}) => ({
     name,
     license: "MIT",
@@ -1287,23 +1281,6 @@ function packageFixtureManifest(t) {
               },
             },
           ),
-          arm: artifact(
-            "arm",
-            "@gadicc/watchbound-node-linux-arm-gnueabihf",
-            arm,
-            {
-              nativeBinding: {
-                path: "watchbound.linux-arm-gnueabihf.node",
-                architecture: "arm",
-                target: "linux-arm-gnueabihf",
-                targetTriple: "armv7-unknown-linux-gnueabihf",
-                libc: "glibc",
-                elfClass: 32,
-                elfMachine: 40,
-                sha256: sha256(armBinding),
-              },
-            },
-          ),
         },
       },
     },
@@ -1312,12 +1289,11 @@ function packageFixtureManifest(t) {
       ["@gadicc/watchbound-node", loader.packageDir],
       ["@gadicc/watchbound-node-linux-x64-gnu", x64.packageDir],
       ["@gadicc/watchbound-node-linux-arm64-gnu", arm64.packageDir],
-      ["@gadicc/watchbound-node-linux-arm-gnueabihf", arm.packageDir],
     ]),
   };
 }
 
-test("the shipped artifact manifest pins the 2.1.1 source and all five packages", () => {
+test("the shipped artifact manifest pins the 2.1.1 source and four packages", () => {
   const manifest = JSON.parse(
     fs.readFileSync(path.join(__dirname, "watchbound-artifacts.json"), "utf8"),
   );
@@ -1339,21 +1315,17 @@ test("the shipped artifact manifest pins the 2.1.1 source and all five packages"
     manifest.packages.targets.arm64.nativeBinding.path,
     "watchbound.linux-arm64-gnu.node",
   );
-  assert.equal(
-    manifest.packages.targets.arm.nativeBinding.path,
-    "watchbound.linux-arm-gnueabihf.node",
-  );
-  assert.deepEqual(Object.keys(manifest.packages.targets), ["x64", "arm64", "arm"]);
+  assert.deepEqual(Object.keys(manifest.packages.targets), ["x64", "arm64"]);
 });
 
 test("the artifact manifest requires every supported Codex architecture", (t) => {
   const fixture = packageFixtureManifest(t);
-  for (const architecture of ["x64", "arm64", "arm"]) {
+  for (const architecture of ["x64", "arm64"]) {
     const incomplete = structuredClone(fixture.manifest);
     delete incomplete.packages.targets[architecture];
     assert.throws(
       () => validateArtifactManifest(incomplete),
-      /must contain exactly the x64, arm64, and arm targets/u,
+      /must contain exactly the x64 and arm64 targets/u,
     );
   }
 });
@@ -1675,7 +1647,7 @@ test("controlled source staging rejects installed wrapper and loader inventory d
   }
 });
 
-test("Watchbound package staging selects ARM64 and ARMv7 targets", async (t) => {
+test("Watchbound package staging selects the ARM64 target", async (t) => {
   const fixture = packageFixtureManifest(t);
   const materializePackage = async (request) => ({
     packageDir: fixture.packages.get(request.name),
@@ -1684,7 +1656,7 @@ test("Watchbound package staging selects ARM64 and ARMv7 targets", async (t) => 
     sha256: request.sha256,
     source: "fixture",
   });
-  for (const arch of ["arm64", "arm"]) {
+  for (const arch of ["arm64"]) {
     const extractedDir = tempDirectory(t, `watchbound-${arch}-app-`);
     writeExtractedAppRuntime(extractedDir);
     await stageWatchboundPackages(packageStageOptions(extractedDir, fixture, {
@@ -1730,8 +1702,6 @@ test("Watchbound staging rejects architecture switches before changing the packa
   for (const [firstArch, secondArch] of [
     ["x64", "arm64"],
     ["arm64", "x64"],
-    ["x64", "arm"],
-    ["arm", "arm64"],
   ]) {
     const extractedDir = tempDirectory(t, `watchbound-${firstArch}-switch-`);
     writeExtractedAppRuntime(extractedDir);
